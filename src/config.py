@@ -18,6 +18,6 @@ OBS_DURATION = (TCHANS * DT).to(u.s).value
 SLEW_TIME_S = 15
 
 # Parametri Training
-LATENT_DIM = 64
+LATENT_DIM = 8
 BATCH_SIZE = 32
 EPOCHS = 50
