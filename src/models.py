@@ -82,79 +82,43 @@ def build_decoder(latent_dim, target_shape):
     x = layers.BatchNormalization()(x)
     
     # Output finale (Ricostruzione)
-    decoder_outputs = layers.Conv2DTranspose(1, 3, padding="same", activation="linear")(x)
+    decoder_outputs = layers.Conv2DTranspose(1, 3, padding="same", activation="sigmoid")(x)
     
     return keras.Model(latent_inputs, decoder_outputs, name="decoder")
 
 class CVAE(keras.Model):
-    """
-        Modello Completo Convolutional Variational Autoencoder con parametro Beta
-    """
-    def __init__(self, encoder, decoder, beta=1.0, **kwargs):
+    """Modello CVAE completo con loss BCE"""
+    def __init__(self, encoder, decoder, beta=1.5, **kwargs):
         super(CVAE, self).__init__(**kwargs)
         self.encoder = encoder
         self.decoder = decoder
-        self.beta = beta # Beta factor per disentanglement (Ma et al. usano valori specifici)
+        self.beta = beta
         
-        # Metriche per tracciare il training
+        # Tracker
         self.total_loss_tracker = keras.metrics.Mean(name="total_loss")
         self.reconstruction_loss_tracker = keras.metrics.Mean(name="reconstruction_loss")
         self.kl_loss_tracker = keras.metrics.Mean(name="kl_loss")
+        self.val_total_loss_tracker = keras.metrics.Mean(name="val_total_loss")
+        self.val_reconstruction_loss_tracker = keras.metrics.Mean(name="val_reconstruction_loss")
+        self.val_kl_loss_tracker = keras.metrics.Mean(name="val_kl_loss")
 
     @property
     def metrics(self):
         return [
-            self.total_loss_tracker,
-            self.reconstruction_loss_tracker,
-            self.kl_loss_tracker,
+            self.total_loss_tracker, self.reconstruction_loss_tracker, self.kl_loss_tracker,
+            self.val_total_loss_tracker, self.val_reconstruction_loss_tracker, self.val_kl_loss_tracker
         ]
 
-    def train_step(self, data):
-        with tf.GradientTape() as tape:
-            # Forward pass
-            z_mean, z_log_var, z = self.encoder(data)
-            reconstruction = self.decoder(z)
-            
-            # Calcolo Loss Ricostruzione (MSE o Binary Crossentropy)
-            # Qui usiamo MSE perché i dati sono normalizzati
-            reconstruction_loss = tf.reduce_mean(
-                tf.reduce_sum(
-                    keras.losses.mse(data, reconstruction), axis=(1, 2)
-                )
-            )
-            
-            # Calcolo Loss KL Divergence
-            kl_loss = -0.5 * (1 + z_log_var - tf.square(z_mean) - tf.exp(z_log_var))
-            kl_loss = tf.reduce_mean(tf.reduce_sum(kl_loss, axis=1))
-            
-            # Loss Totale
-            total_loss = reconstruction_loss + (self.beta * kl_loss)
-            
-        # Backpropagation
-        grads = tape.gradient(total_loss, self.trainable_weights)
-        self.optimizer.apply_gradients(zip(grads, self.trainable_weights))
+    def _calculate_loss(self, data):
+        if isinstance(data, tuple): data = data[0]
+        z_mean, z_log_var, z = self.encoder(data)
+        reconstruction = self.decoder(z)
         
-        # Aggiornamento metriche
-        self.total_loss_tracker.update_state(total_loss)
-        self.reconstruction_loss_tracker.update_state(reconstruction_loss)
-        self.kl_loss_tracker.update_state(kl_loss)
-        
-        return {
-            "loss": self.total_loss_tracker.result(),
-            "reconstruction_loss": self.reconstruction_loss_tracker.result(),
-            "kl_loss": self.kl_loss_tracker.result(),
-        }
-
-    def test_step(self, data):
-        if isinstance(data, tuple):
-            data = data[0]
-
-        z_mean, z_log_var, z = self.encoder(data, training=False)
-        reconstruction = self.decoder(z, training=False)
-        
+        # --- RIPRISTINATA LOSS DI MA ---
+        # Binary Cross-Entropy (BCE) è la loss corretta per output Sigmoid [0, 1]
         reconstruction_loss = tf.reduce_mean(
             tf.reduce_sum(
-                keras.losses.mse(data, reconstruction), axis=(1, 2)
+                keras.losses.binary_crossentropy(data, reconstruction), axis=(1, 2)
             )
         )
         
@@ -162,18 +126,30 @@ class CVAE(keras.Model):
         kl_loss = tf.reduce_mean(tf.reduce_sum(kl_loss, axis=1))
         
         total_loss = reconstruction_loss + (self.beta * kl_loss)
+        return total_loss, reconstruction_loss, kl_loss
+
+    def train_step(self, data):
+        with tf.GradientTape() as tape:
+            total_loss, reconstruction_loss, kl_loss = self._calculate_loss(data)
+            
+        grads = tape.gradient(total_loss, self.trainable_weights)
+        self.optimizer.apply_gradients(zip(grads, self.trainable_weights))
         
         self.total_loss_tracker.update_state(total_loss)
         self.reconstruction_loss_tracker.update_state(reconstruction_loss)
         self.kl_loss_tracker.update_state(kl_loss)
         
-        return {
-            "loss": self.total_loss_tracker.result(),
-            "reconstruction_loss": self.reconstruction_loss_tracker.result(),
-            "kl_loss": self.kl_loss_tracker.result(),
-        }
+        return {m.name: m.result() for m in self.metrics if 'val_' not in m.name}
+
+    def test_step(self, data):
+        total_loss, reconstruction_loss, kl_loss = self._calculate_loss(data)
         
+        self.val_total_loss_tracker.update_state(total_loss)
+        self.val_reconstruction_loss_tracker.update_state(reconstruction_loss)
+        self.val_kl_loss_tracker.update_state(kl_loss)
+        
+        return {m.name: m.result() for m in self.metrics}
+
     def call(self, inputs):
-        # Per inferenza standard
         z_mean, z_log_var, z = self.encoder(inputs)
         return self.decoder(z)

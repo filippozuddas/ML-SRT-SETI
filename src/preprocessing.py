@@ -13,17 +13,20 @@ def resize_data(data_batch):
 
 def normalize_frame(frame_data):
     """
-    Applica log e normalizzazione Z-score ai dati.
+    Log normalization + min-max scaling per singolo frame.
     """
     
     # Log per comprimere il range dinamico
     data_log = np.log(frame_data + 1e-9) # epsilon per evitare log(0)
     
-    # Z-Score Normalization (per frame)
-    mean = np.mean(data_log)
-    std = np.std(data_log)
+    min_val = np.min(data_log)
+    max_val = np.max(data_log)
     
-    data_norm = (data_log - mean) / (std + 1e-9)
+    # Gestisce il caso di frame piatto (divisione per zero)
+    if (max_val - min_val) == 0:
+        return np.zeros_like(data_log)
+        
+    data_norm = (data_log - min_val) / (max_val - min_val)
     return data_norm
 
 def preprocess_cadence(cadence_obj): 
