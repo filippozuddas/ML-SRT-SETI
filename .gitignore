@@ -1,2 +1,4 @@
 *.npy
 *.pcy
+
+__pychache__

@@ -23,8 +23,10 @@ def build_encoder(input_shape, latent_dim):
     
     encoder_inputs = keras.Input(shape=input_shape)
     
+    x = layers.BatchNormalization()(encoder_inputs)
+    
     # Blocco Convoluzionale 1
-    x = layers.Conv2D(32, 3, strides=2, padding="same", activation="relu")(encoder_inputs)
+    x = layers.Conv2D(32, 3, strides=2, padding="same", activation="relu")(x)
     x = layers.BatchNormalization()(x)
     
     # Blocco Convoluzionale 2
@@ -37,7 +39,9 @@ def build_encoder(input_shape, latent_dim):
     
     # Appiattimento e Vettore Latente
     x = layers.Flatten()(x)
+    x = layers.BatchNormalization()(x)
     x = layers.Dense(128, activation="relu")(x)
+    x = layers.BatchNormalization()(x)
     
     # Output media e log-varianza (per la distribuzione gaussiana)
     z_mean = layers.Dense(latent_dim, name="z_mean")(x)

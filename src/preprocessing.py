@@ -11,13 +11,13 @@ def resize_data(data_batch):
     # (1, 1, factor) riduce solo l'ultimo asse
     return downscale_local_mean(data_batch, (1, 1, config.RESIZE_FACTOR))
 
-def normalize_data(data):
+def normalize_frame(frame_data):
     """
     Applica log e normalizzazione Z-score ai dati.
     """
     
     # Log per comprimere il range dinamico
-    data_log = np.log(data + 1e-9) # epsilon per evitare log(0)
+    data_log = np.log(frame_data + 1e-9) # epsilon per evitare log(0)
     
     # Z-Score Normalization (per frame)
     mean = np.mean(data_log)
@@ -35,10 +35,15 @@ def preprocess_cadence(cadence_obj):
     raw_data = np.array([frame.data for frame in cadence_obj])
     
     # Resize
-    resized = resize_data(raw_data)
+    resized_data = resize_data(raw_data)
+
+    processed_frames = []
     
-    # Normalize
-    normalized = normalize_data(resized)
+    for i in range(resized_data.shape[0]):
+        frame_norm = normalize_frame(resized_data[i])
+        processed_frames.append(frame_norm)
+        
+    final_data = np.array(processed_frames)
     
     # Add Channel Dimension (necessario per Conv2D)
-    return normalized[..., np.newaxis]
+    return final_data[..., np.newaxis]
