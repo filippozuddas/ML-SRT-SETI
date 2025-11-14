@@ -78,7 +78,7 @@ def build_decoder(latent_dim, target_shape):
     x = layers.BatchNormalization()(x)
     
     # Output finale (Ricostruzione)
-    decoder_outputs = layers.Conv2DTranspose(1, 3, padding="same", activation="sigmoid")(x)
+    decoder_outputs = layers.Conv2DTranspose(1, 3, padding="same", activation="linear")(x)
     
     return keras.Model(latent_inputs, decoder_outputs, name="decoder")
 
@@ -131,6 +131,34 @@ class CVAE(keras.Model):
         self.optimizer.apply_gradients(zip(grads, self.trainable_weights))
         
         # Aggiornamento metriche
+        self.total_loss_tracker.update_state(total_loss)
+        self.reconstruction_loss_tracker.update_state(reconstruction_loss)
+        self.kl_loss_tracker.update_state(kl_loss)
+        
+        return {
+            "loss": self.total_loss_tracker.result(),
+            "reconstruction_loss": self.reconstruction_loss_tracker.result(),
+            "kl_loss": self.kl_loss_tracker.result(),
+        }
+
+    def test_step(self, data):
+        if isinstance(data, tuple):
+            data = data[0]
+
+        z_mean, z_log_var, z = self.encoder(data, training=False)
+        reconstruction = self.decoder(z, training=False)
+        
+        reconstruction_loss = tf.reduce_mean(
+            tf.reduce_sum(
+                keras.losses.mse(data, reconstruction), axis=(1, 2)
+            )
+        )
+        
+        kl_loss = -0.5 * (1 + z_log_var - tf.square(z_mean) - tf.exp(z_log_var))
+        kl_loss = tf.reduce_mean(tf.reduce_sum(kl_loss, axis=1))
+        
+        total_loss = reconstruction_loss + (self.beta * kl_loss)
+        
         self.total_loss_tracker.update_state(total_loss)
         self.reconstruction_loss_tracker.update_state(reconstruction_loss)
         self.kl_loss_tracker.update_state(kl_loss)
