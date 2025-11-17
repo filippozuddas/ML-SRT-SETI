@@ -63,15 +63,15 @@ def build_decoder(latent_dim, target_shape):
     x = layers.Dense(1 * 32 * 256, activation="relu", **REG_PARAMS)(x)
     x = layers.Reshape((1, 32, 256))(x)
     
-    # 4 Livelli De-Convoluzionali
-    # 1x32 -> 2x64
     x = layers.Conv2DTranspose(256, DEFAULT_KERNEL, activation="relu", strides=2, padding="same", **REG_PARAMS)(x)
-    # 2x64 -> 4x128
     x = layers.Conv2DTranspose(128, DEFAULT_KERNEL, activation="relu", strides=1, padding="same", **REG_PARAMS)(x)
-    # 4x128 -> 8x256
+    x = layers.Conv2DTranspose(64, DEFAULT_KERNEL, activation="relu", strides=1, padding="same", **REG_PARAMS)(x)
     x = layers.Conv2DTranspose(64, DEFAULT_KERNEL, activation="relu", strides=2, padding="same", **REG_PARAMS)(x)
-    # 8x256 -> 16x512
+    x = layers.Conv2DTranspose(32, DEFAULT_KERNEL, activation="relu", strides=1, padding="same", **REG_PARAMS)(x)
+    x = layers.Conv2DTranspose(32, DEFAULT_KERNEL, activation="relu", strides=1, padding="same", **REG_PARAMS)(x)
     x = layers.Conv2DTranspose(32, DEFAULT_KERNEL, activation="relu", strides=2, padding="same", **REG_PARAMS)(x)
+    x = layers.Conv2DTranspose(16, DEFAULT_KERNEL, activation="relu", strides=1, padding="same", **REG_PARAMS)(x)
+    x = layers.Conv2DTranspose(16, DEFAULT_KERNEL, activation="relu", strides=2, padding="same", **REG_PARAMS)(x)
     
     # Output Sigmoid per dati [0, 1]
     decoder_outputs = layers.Conv2DTranspose(1, DEFAULT_KERNEL, activation="sigmoid", padding="same")(x)
