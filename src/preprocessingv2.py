@@ -1,39 +1,48 @@
 import numpy as np
 from skimage.transform import downscale_local_mean
 
-class CadencePreprocessor:
-    def __init__(self, target_shape=(16, 512), downsample_factor=8):
-        """
-        Gestisce la trasformazione dei dati grezzi in input per il VAE
-        """
-        self.target_shape = target_shape
-        self.downsample_factor = downsample_factor
+def resize_spectrogram(data, time_factor=1, freq_factor=8):
+    """
+    Ridimensiona lo spettrogramma riducendo la risoluzione (downsampling).
+    4096 canali -> 512 canali (fattore 8)
+    """
+    # Data shape attesa: (Time, Freq)
+    # downscale_local_mean esegue una media locale (pooling)
+    resized = downscale_local_mean(data, (time_factor, freq_factor))
+    return resized
 
-    def process_cadence(self, cadence_data):
-        """
-        Processa un'intera cadenza (6 osservazioni) congiuntamente.
+def normalize_spectrogram(data):
+    """
+    Normalizza lo spettrogramma tra 0 e 1 usando scala logaritmica.
+    """
+    # Aggiungiamo una costante epsilon per evitare log(0)
+    data = np.log(data + 1e-9)
+    
+    # Min-Max scaling
+    min_val = data.min()
+    data = data - min_val
+    
+    max_val = data.max()
+    if max_val != 0:
+        data = data / max_val
         
-        Input: Array numpy di shape (6, 16, input_freq) es. (6, 16, 4096)
-        Output: Array numpy di shape (6, 16, target_freq) es. (6, 16, 512) normalizzato 0-1.
-        """
+    return data
+
+def preprocess_pipeline(cadence_stack, resize_factor=8):
+    """
+    Applica la pipeline completa a una intera cadenza (6 osservazioni).
+    Input: (6, 16, 4096)
+    Output: (6, 16, 512, 1) -> Formato pronto per TensorFlow
+    """
+    processed_scans = []
+    
+    for scan in cadence_stack:
+        # 1. Resize
+        resized = resize_spectrogram(scan, freq_factor=resize_factor)
+        # 2. Normalize
+        normalized = normalize_spectrogram(resized)
+        processed_scans.append(normalized)
         
-        # Eseguiamo Downsampling Frequenziale (Binning) 
-        data_binned = downscale_local_mean(cadence_data, (1, 1, self.downsample_factor))
-        
-        # Log Normalization (con epsilon di sicurezza per evitare log(0))
-        data_log = np.log(data_binned + 1e-9)
-        
-        """
-        Min-Max Scaling Congiunto (Joint Normalization)
-        Calcoliamo min e max su TUTTI i 6 frame contemporaneamente
-        Questo preserva il contrasto relativo tra segnale (ON) e rumore (OFF)
-        """
-        min_val = np.min(data_log)
-        max_val = np.max(data_log)
-        
-        if max_val == min_val:
-            return np.zeros_like(data_log, dtype=np.float32)
-            
-        data_scaled = (data_log - min_val) / (max_val - min_val)
-        
-        return data_scaled.astype(np.float32)
+    # Stack e aggiunta dimensione canale (richiesto da Conv2D: H, W, Channels)
+    # Risultato: (6, 16, 512, 1)
+    return np.expand_dims(np.array(processed_scans), axis=-1)

@@ -1,186 +1,124 @@
 import numpy as np
+import tensorflow as tf
 import setigen as stg
 from astropy import units as u
-import tensorflow as tf
-from .preprocessingv2 import CadencePreprocessor
+from .preprocessingv2 import preprocess_pipeline
 
-class SetigenGenerator:
-    def __init__(self, batch_size=32, snr_range=(10, 50), drift_range=(0.5, 8.0)):
-        """
-        Generatore Fedele all'implementazione di Peter Ma.
-        """
+class SetiHybridGenerator(tf.keras.utils.Sequence):
+    def __init__(self, 
+                 background_plates=None,  # Se None -> Usa rumore sintetico. Se Array -> Usa dati SRT
+                 batch_size=32, 
+                 samples_per_epoch=1000,
+                 fchans=4096, 
+                 tchans=16):
+        
         self.batch_size = batch_size
-        self.snr_min, self.snr_max = snr_range
-        self.drift_min, self.drift_max = drift_range
+        self.samples_per_epoch = samples_per_epoch
+        self.fchans = fchans
+        self.tchans = tchans
+        self.plates = background_plates
         
-        # Parametri fisici GBT/SRT
-        self.df = 2.7939677238464355 
-        self.dt = 18.25361108 
-        self.fch1 = 6095.214842353016 
+        # Parametri simulazione fisica
+        self.df = 2.7939677238464355 * u.Hz
+        self.dt = 18.25361108 * u.s
+
+    def __len__(self):
+        return int(self.samples_per_epoch // self.batch_size)
+
+    def __getitem__(self, index):
+        # Generazione batch "True" (Segnali ETI solo su ON)
+        true_batch = self._generate_batch(label='true')
         
-        # Dimensioni Raw
-        self.raw_time = 16
-        self.raw_freq = 4096
-        self.total_time = self.raw_time * 6 # 96 bin totali per la cadenza impilata
-
-        # Inizializza Preprocessor
-        self.preprocessor = CadencePreprocessor(target_shape=(16, 512), downsample_factor=8)
-
-    def _get_random_drift(self):
-        """Calcola drift e width casuali."""
-        rate = np.random.uniform(self.drift_min, self.drift_max)
-        sign = np.random.choice([1, -1]) # Fix bug README: uso uniforme
-        drift_rate = rate * sign
+        # Generazione batch "False" (Solo rumore/RFI)
+        false_batch = self._generate_batch(label='false')
         
-        # Width casuale come nel codice originale
-        width = np.random.uniform(5, 30) + abs(drift_rate) * 18.0
-        return drift_rate, width
+        # Creazione del Mixed Batch per l'Encoder (metà True, metà False)
+        half = self.batch_size // 2
+        mixed_batch = np.concatenate([true_batch[:half], false_batch[half:]], axis=0)
+        
+        # Output per il modello (Input Multipli, Output Ricostruzione)
+        return [mixed_batch, true_batch, false_batch], mixed_batch
 
-    def _create_frame_from_data(self, data_array):
-        """Helper per creare un frame setigen da un array numpy esistente."""
-        frame = stg.Frame(fchans=data_array.shape[1]*u.pixel,
-                          tchans=data_array.shape[0]*u.pixel,
-                          df=self.df*u.Hz,
-                          dt=self.dt*u.s,
-                          fch1=self.fch1*u.MHz)
-        # Sovrascriviamo i dati interni
-        frame.data = data_array
-        return frame
-
-    def _inject_signal(self, input_data, snr):
+    def _get_background(self):
         """
-        Inietta un segnale in un blocco dati 96x4096.
-        Replica la funzione 'new_cadence' di Peter Ma.
+        Restituisce un frame di sfondo (Background).
+        - Fase 1: Genera rumore chi-quadro con Setigen.
+        - Fase 2: Estrae un crop casuale dai dati SRT caricati.
         """
-        # Creiamo il frame setigen dai dati esistenti
-        frame = self._create_frame_from_data(np.copy(input_data))
-        
-        # CRITICAL FIX: Calcoliamo e assegniamo la deviazione standard del rumore
-        # Setigen ne ha bisogno per calcolare l'intensità basata sull'SNR.
-        # Poiché input_data è dominato dal rumore, np.std() è una buona stima.
-        frame.noise_std = np.std(input_data)
-        
-        drift_rate, width = self._get_random_drift()
-        
-        # Logica di start casuale (evitando i bordi estremi)
-        start_index = np.random.randint(int(self.raw_freq*0.1), int(self.raw_freq*0.9))
-        start_freq = frame.get_frequency(index=start_index)
-        
-        # Iniezione
-        # Nota: frame.get_intensity usa frame.noise_std che abbiamo appena settato
-        frame.add_signal(stg.constant_path(f_start=start_freq,
-                                           drift_rate=drift_rate*u.Hz/u.s),
-                         stg.constant_t_profile(level=frame.get_intensity(snr=snr)),
-                         stg.gaussian_f_profile(width=width*u.Hz),
-                         stg.constant_bp_profile(level=1))
-        
-        return frame.data
-
-    def _generate_base_noise(self):
-        """Genera il rumore di fondo (96x4096)."""
-        # Creiamo un frame vuoto
-        frame = stg.Frame(fchans=self.raw_freq*u.pixel,
-                          tchans=self.total_time*u.pixel,
-                          df=self.df*u.Hz,
-                          dt=self.dt*u.s,
-                          fch1=self.fch1*u.MHz)
-        # Aggiungiamo rumore chi2 (come nel paper)
-        frame.add_noise(x_mean=10, noise_type='chi2')
-        return frame.data
-
-    def _slice_cadence(self, stacked_data):
-        """Taglia l'array (96, 4096) in (6, 16, 4096)."""
-        panels = []
-        for i in range(6):
-            # Prende blocchi di 16 righe
-            panel = stacked_data[i*16 : (i+1)*16, :]
-            panels.append(panel)
-        return np.array(panels)
-
-    def generate_batch(self):
-        """Genera un singolo campione (X, y)."""
-        
-        # 1. Genera Sfondo (Noise) continuo per 96 time steps
-        base_noise = self._generate_base_noise()
-        
-        label = np.random.choice([0, 1]) # 0=False, 1=True
-        
-        if label == 0: # Categoria FALSE (Noise o RFI)
-            if np.random.rand() > 0.5:
-                # Pure Noise
-                final_stack = base_noise
-            else:
-                # Noise + RFI (RFI è un segnale presente ovunque)
-                # Iniettiamo il segnale sullo sfondo base
-                rfi_snr = np.random.uniform(self.snr_min, self.snr_max)
-                final_stack = self._inject_signal(base_noise, rfi_snr)
+        if self.plates is None:
+            # MODALITÀ SINTETICA (FASE 1)
+            frame = stg.Frame(fchans=self.fchans, tchans=self.tchans, df=self.df, dt=self.dt)
+            noise = frame.add_noise(x_mean=10, noise_type='chi2')
+            return frame
+        else:
+            # MODALITÀ REALE (FASE 2)
+            # Estraiamo un indice casuale dal dataset di background
+            idx = np.random.randint(0, self.plates.shape[0])
+            real_data = self.plates[idx] 
             
-            cadence_raw = self._slice_cadence(final_stack)
-            
-        else: # Categoria TRUE (Segnale SETI)
-            # Qui dobbiamo replicare la logica "True" e "True + RFI"
-            
-            target_snr = np.random.uniform(self.snr_min, self.snr_max)
-            
-            if np.random.rand() > 0.5:
-                # Case A: True Single Shot (Solo ETI, niente RFI)
-                # Iniettiamo ETI sul rumore base
-                eti_stack = self._inject_signal(base_noise, target_snr)
-                
-                # Tagliamo entrambi
-                panels_eti = self._slice_cadence(eti_stack)
-                panels_noise = self._slice_cadence(base_noise)
-                
-                # Costruiamo ON-OFF
-                cadence_frames = []
-                for i in range(6):
-                    if i % 2 == 0: # ON (0, 2, 4)
-                        cadence_frames.append(panels_eti[i])
-                    else: # OFF (1, 3, 5)
-                        cadence_frames.append(panels_noise[i])
-                cadence_raw = np.array(cadence_frames)
-                
-            else:
-                # Case B: True + RFI (Difficile)
-                # Prima creiamo lo sfondo con RFI
-                rfi_snr = np.random.uniform(self.snr_min, self.snr_max)
-                rfi_stack = self._inject_signal(base_noise, rfi_snr)
-                
-                # Poi iniettiamo ETI SOPRA lo sfondo RFI
-                # (Usiamo una copia per non sporcare i pannelli OFF)
-                eti_on_rfi_stack = self._inject_signal(rfi_stack, target_snr)
-                
-                panels_eti_rfi = self._slice_cadence(eti_on_rfi_stack)
-                panels_rfi = self._slice_cadence(rfi_stack)
-                
-                cadence_frames = []
-                for i in range(6):
-                    if i % 2 == 0: # ON -> ETI + RFI
-                        cadence_frames.append(panels_eti_rfi[i])
-                    else: # OFF -> Solo RFI
-                        cadence_frames.append(panels_rfi[i])
-                cadence_raw = np.array(cadence_frames)
+            # Creiamo il frame Setigen a partire dai dati reali
+            # Assumiamo una fch1 fittizia per coerenza
+            frame = stg.Frame.from_data(self.df, self.dt, fch1=6000*u.MHz, data=real_data)
+            return frame
 
-        # 4. Preprocessing finale (Downsampling + Norm)
-        # Input: (6, 16, 4096) -> Output: (6, 16, 512)
-        cadence_processed = self.preprocessor.process_cadence(cadence_raw)
+    def _generate_batch(self, label):
+        batch_data = []
         
-        return cadence_processed, label
+        for _ in range(self.batch_size):
+            cadence = []
+            
+            # Parametri randomici del segnale ETI
+            drift_rate = np.random.uniform(-5, 5)
+            start_index = np.random.randint(200, self.fchans - 200)
+            width = np.random.uniform(20, 40)
+            snr = np.random.uniform(15, 40)
+            
+            # Genera 6 osservazioni (ON-OFF-ON-OFF-ON-OFF)
+            for i in range(6):
+                frame = self._get_background()
+                
+                # Logica di iniezione
+                is_on = (i % 2 == 0) # 0, 2, 4 sono ON
+                inject_signal = False
+                
+                if label == 'true' and is_on:
+                    inject_signal = True
+                
+                # (Opzionale) Aggiungi RFI casuale nel "False" batch o ovunque
+                if label == 'false' and np.random.rand() > 0.5:
+                     # Simula una RFI verticale (drift=0)
+                     frame.add_signal(stg.constant_path(f_start=frame.get_frequency(index=np.random.randint(0, self.fchans)),
+                                                        drift_rate=0*u.Hz/u.s),
+                                      stg.constant_t_profile(level=frame.get_intensity(snr=snr*2)),
+                                      stg.gaussian_f_profile(width=width*u.Hz))
 
-    def get_dataset(self):
-        """Ritorna un tf.data.Dataset."""
-        def generator():
-            while True:
-                data, label = self.generate_batch()
-                # Aggiungi channel dim: (6, 16, 512) -> (6, 16, 512, 1)
-                data = np.expand_dims(data, axis=-1)
-                yield data, label
+                if inject_signal:
+                    # Calcolo frequenza corrente basata sul tempo
+                    # dt * tchans = durata di uno scan
+                    t_elapsed = i * (self.tchans * self.dt.value)
+                    f_drift = drift_rate * t_elapsed # Drift totale in Hz
+                    
+                    freq_val = frame.get_frequency(index=start_index)
+                    if hasattr(freq_val, 'value'):
+                        freq_val = freq_val.value
+                    
+                    current_f_start = (freq_val * u.Hz) + (f_drift * u.Hz)
+                    
+                    try:
+                        frame.add_signal(stg.constant_path(f_start=current_f_start,
+                                                           drift_rate=drift_rate*u.Hz/u.s),
+                                         stg.constant_t_profile(level=frame.get_intensity(snr=snr)),
+                                         stg.gaussian_f_profile(width=width*u.Hz),
+                                         stg.constant_bp_profile(level=1))
+                    except Exception as e:
+                        # Ignora errori se il segnale esce dalla banda (comune con drift alti ai bordi)
+                        pass 
 
-        output_signature = (
-            tf.TensorSpec(shape=(6, 16, 512, 1), dtype=tf.float32),
-            tf.TensorSpec(shape=(), dtype=tf.int32)
-        )
-
-        dataset = tf.data.Dataset.from_generator(generator, output_signature=output_signature)
-        dataset = dataset.batch(self.batch_size).prefetch(tf.data.AUTOTUNE)
-        return dataset
+                cadence.append(frame.data)
+            
+            # Preprocessing e aggiunta al batch
+            cadence_np = np.array(cadence) # (6, 16, 4096)
+            processed = preprocess_pipeline(cadence_np) # (6, 16, 512, 1)
+            batch_data.append(processed)
+            
+        return np.array(batch_data)
