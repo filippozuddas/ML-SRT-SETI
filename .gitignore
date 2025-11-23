@@ -1,4 +1,5 @@
 *.npy
+*.npz
 *.pcy
 
 __pycache__
