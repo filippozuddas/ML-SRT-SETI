@@ -3,7 +3,7 @@ import setigen as stg
 from astropy import units as u
 from tqdm import tqdm
 import os
-from preprocessingv2 import preprocess_pipeline
+from .preprocessingv2 import preprocess_pipeline
 
 base_dir = os.path.dirname("/home/filippo/TirocinioSETI/ML-SRT-SETI/")
 data_path = os.path.join(base_dir, 'data')
@@ -130,7 +130,7 @@ class SetiHybridGenerator():
         
         return np.array(batch_data)
     
-    def generate_and_save(self, filename="synthetic_dataset.npz"):
+    def generate_and_save(self, filename= f"{data_path}/synthetic_dataset.npz"):
         """
         Genera i dati ciclando per il numero di batch necessari e salva su disco.
         """
