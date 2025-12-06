@@ -33,8 +33,8 @@ class SetiHybridGenerator():
         """
         if self.background_plates is None:
             # MODALITÀ SINTETICA (FASE 1)
-            frame = stg.Frame(fchans=self.fchans, tchans=self.tchans, df=self.df, dt=self.dt, fch1=6000*u.MHz)
-            noise = frame.add_noise(x_mean=10, noise_type='chi2')
+            frame = stg.Frame(fchans=self.fchans, tchans=self.tchans, df=self.df, dt=self.dt, fch1=6095.214842353016*u.MHz)
+            noise = frame.add_noise(x_mean=58348559, noise_type='chi2')
             return frame
         else:
             # MODALITÀ REALE (FASE 2)
@@ -43,7 +43,6 @@ class SetiHybridGenerator():
             real_data = self.plates[idx] 
             
             # Creiamo il frame Setigen a partire dai dati reali
-            # Assumiamo una fch1 fittizia per coerenza
             frame = stg.Frame.from_data(self.df, self.dt, fch1=6000*u.MHz, data=real_data)
             return frame
 
