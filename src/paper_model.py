@@ -153,12 +153,12 @@ class VAE(keras.Model):
         similarity = 0
         difference = 0
         same = 0
-        a1 = self.encoder(true_data[:,0,:,:,:], training)[2]
-        b = self.encoder(true_data[:,1,:,:,:], training)[2]
-        a2 = self.encoder(true_data[:,2,:,:,:],training)[2]
-        c = self.encoder(true_data[:,3,:,:,:], training)[2]
-        a3 = self.encoder(true_data[:,4,:,:,:], training)[2]
-        d = self.encoder(true_data[:,5,:,:,:], training)[2]
+        a1 = self.encoder(true_data[:,0,:,:,:])[2]
+        b = self.encoder(true_data[:,1,:,:,:])[2]
+        a2 = self.encoder(true_data[:,2,:,:,:])[2]
+        c = self.encoder(true_data[:,3,:,:,:])[2]
+        a3 = self.encoder(true_data[:,4,:,:,:])[2]
+        d = self.encoder(true_data[:,5,:,:,:])[2]
 
         difference += self.loss_diff(a1,b)
         difference += self.loss_diff(a1,c)
@@ -190,12 +190,12 @@ class VAE(keras.Model):
         similarity = 0
         difference = 0
         same = 0
-        a1 = self.encoder(false_data[:,0,:,:,:], training)[2]
-        b = self.encoder(false_data[:,1,:,:,:], training)[2]
-        a2 = self.encoder(false_data[:,2,:,:,:],training)[2]
-        c = self.encoder(false_data[:,3,:,:,:], training)[2]
-        a3 = self.encoder(false_data[:,4,:,:,:], training)[2]
-        d = self.encoder(false_data[:,5,:,:,:], training)[2]
+        a1 = self.encoder(false_data[:,0,:,:,:])[2]
+        b = self.encoder(false_data[:,1,:,:,:])[2]
+        a2 = self.encoder(false_data[:,2,:,:,:])[2]
+        c = self.encoder(false_data[:,3,:,:,:])[2]
+        a3 = self.encoder(false_data[:,4,:,:,:])[2]
+        d = self.encoder(false_data[:,5,:,:,:])[2]
 
         difference += self.loss_same(a1,b)
         difference += self.loss_same(a1,c)
@@ -396,7 +396,7 @@ def build_model(latent_dim=8,dens_lay=512, kernel=(3,3), alpha=10, beta=2, gamma
     decoder.summary()
 
     vae = VAE(encoder, decoder, alpha, beta, gamma)
-    vae.compile(optimizer=keras.optimizers.Adam(lr=0.001))
+    vae.compile(optimizer=keras.optimizers.Adam(learning_rate=0.001))
     return vae
 
 strategy = tf.distribute.MirroredStrategy(cross_device_ops=tf.distribute.ReductionToOneDevice())

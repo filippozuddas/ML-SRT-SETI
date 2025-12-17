@@ -31,7 +31,7 @@ class ContrastiveVAE(keras.Model):
                  encoder: keras.Model,
                  decoder: keras.Model,
                  alpha: float = 10,
-                 beta: float = 0.5,
+                 beta: float = 1.5,  # Paper: beta=1.5 for balance with clustering loss
                  gamma: float = 0,
                  **kwargs):
         """
@@ -74,11 +74,25 @@ class ContrastiveVAE(keras.Model):
             self.kl_loss_tracker,
             self.true_loss_tracker,
             self.false_loss_tracker,
+            self.val_total_loss_tracker,
+            self.val_reconstruction_loss_tracker,
+            self.val_kl_loss_tracker,
+            self.val_true_loss_tracker,
+            self.val_false_loss_tracker,
         ]
     
     def call(self, inputs, training=False):
-        """Forward pass through encoder and decoder."""
-        z_mean, z_log_var, z = self.encoder(inputs, training=training)
+        """Forward pass through encoder and decoder.
+        
+        Handles both single input and list of inputs (for model.fit with multiple inputs).
+        """
+        # Handle list of inputs from model.fit([vae_data, true_data, false_data], ...)
+        if isinstance(inputs, (list, tuple)):
+            vae_input = inputs[0]  # Only use first input for VAE forward pass
+        else:
+            vae_input = inputs
+            
+        z_mean, z_log_var, z = self.encoder(vae_input, training=training)
         reconstruction = self.decoder(z, training=training)
         return z_mean, z_log_var, z, reconstruction
     
@@ -181,6 +195,7 @@ class ContrastiveVAE(keras.Model):
         
         Args:
             data: Tuple of ((vae_input, true_data, false_data), target)
+                  All inputs should have same first dimension (N*6).
         """
         x, y = data
         vae_input = x[0]
@@ -192,13 +207,13 @@ class ContrastiveVAE(keras.Model):
             z_mean, z_log_var, z = self.encoder(vae_input, training=True)
             reconstruction = self.decoder(z, training=True)
             
-            # Reconstruction loss
+            # Reconstruction loss (no normalization, like original)
             reconstruction_loss = tf.reduce_mean(
                 tf.reduce_sum(
                     keras.losses.binary_crossentropy(y, reconstruction),
                     axis=(1, 2)
                 )
-            ) / (16 * 512)
+            )
             
             # KL divergence loss
             kl_loss = -0.5 * (1 + z_log_var - tf.square(z_mean) - tf.exp(z_log_var))
@@ -210,7 +225,7 @@ class ContrastiveVAE(keras.Model):
             
             # Total loss
             total_loss = (
-                reconstruction_loss / (16 * 256) + 
+                reconstruction_loss + 
                 self.beta * kl_loss + 
                 self.alpha * (true_loss + false_loss)
             )
@@ -245,13 +260,13 @@ class ContrastiveVAE(keras.Model):
         z_mean, z_log_var, z = self.encoder(vae_input, training=False)
         reconstruction = self.decoder(z, training=False)
         
-        # Calculate losses
+        # Calculate losses (no normalization, like original)
         reconstruction_loss = tf.reduce_mean(
             tf.reduce_sum(
                 keras.losses.binary_crossentropy(y, reconstruction),
                 axis=(1, 2)
             )
-        ) / (16 * 512)
+        )
         
         kl_loss = -0.5 * (1 + z_log_var - tf.square(z_mean) - tf.exp(z_log_var))
         kl_loss = tf.reduce_mean(tf.reduce_sum(kl_loss, axis=1))
@@ -295,7 +310,7 @@ def build_vae(
     dense_units: int = 512,
     kernel_size: Tuple[int, int] = (3, 3),
     alpha: float = 10,
-    beta: float = 0.5,
+    beta: float = 1.5,  # Paper: beta=1.5 for balance with clustering loss
     gamma: float = 0,
     learning_rate: float = 0.001,
     l1_weight: float = 0.001,

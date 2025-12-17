@@ -247,15 +247,24 @@ class CadenceGenerator:
         Create a FALSE sample (RFI pattern or pure noise).
         
         A false sample is either:
-        - 50% chance: Same signal in all observations (RFI behavior)
-        - 50% chance: Pure background noise
+        - RFI pattern: Same signal in all observations (if snr provided, always this)
+        - Pure background noise (50% chance, only when snr=None)
         
         Args:
-            snr: Signal SNR for RFI case
+            snr: Signal SNR for RFI case. If provided, always creates RFI pattern.
             
         Returns:
             Cadence array of shape (6, tchans, fchans)
         """
+        # If SNR explicitly provided, always create RFI pattern
+        # (for fair SNR sensitivity testing)
+        if snr is not None:
+            background = self._get_background()
+            stacked = self._stack_cadence(background)
+            injected, _ = self.signal_gen.inject_cadence_signal(stacked, snr)
+            return self._unstack_cadence(injected)
+        
+        # Otherwise, random choice between RFI and pure noise
         choice = self.rng.random()
         
         if choice > 0.5:
@@ -263,9 +272,8 @@ class CadenceGenerator:
             background = self._get_background()
             stacked = self._stack_cadence(background)
             
-            if snr is None:
-                snr = self.rng.uniform(self.params.snr_base, 
-                                       self.params.snr_base + self.params.snr_range)
+            snr = self.rng.uniform(self.params.snr_base, 
+                                   self.params.snr_base + self.params.snr_range)
             
             injected, _ = self.signal_gen.inject_cadence_signal(stacked, snr)
             return self._unstack_cadence(injected)
