@@ -1,0 +1,71 @@
+# Test configuration - quick validation run
+# Uses reduced parameters for fast testing
+
+# Data Generation Parameters
+data:
+  frame_height: 16
+  frame_width: 512
+  original_width: 4096
+  downscale_factor: 8
+  num_observations: 6
+  df: 2.7939677238464355
+  dt: 18.25361108
+  fch1: 6095.214842353016
+
+# Signal Injection Parameters
+signal:
+  snr_min: 10
+  snr_max: 80
+  snr_base: 20
+  snr_range: 40
+  drift_rate_factor: 1.0
+  width_base: 50
+  width_drift_factor: 18
+  noise_mean: 58348559
+  noise_type: 'chi2'
+
+# VAE Model Architecture
+model:
+  latent_dim: 8
+  dense_units: 512
+  kernel_size: [3, 3]
+  l1_weight: 0.001
+  l2_weight: 0.01
+  alpha: 10
+  beta: 0.5
+  gamma: 0
+
+# Training Parameters - REDUCED FOR TESTING
+training:
+  batch_size: 100          # Reduced from 1000
+  validation_batch_size: 100
+  epochs_per_cycle: 5      # Reduced from 100
+  num_cycles: 2            # Reduced from 20
+  num_samples_train: 200   # Reduced from 6000
+  num_samples_val: 50      # Reduced from 1000
+  learning_rate: 0.001
+  optimizer: 'adam'
+  checkpoint_dir: 'checkpoints'
+  save_frequency: 1
+
+# Random Forest Classifier
+classifier:
+  n_estimators: 100        # Reduced from 1000
+  max_features: 'sqrt'
+  bootstrap: true
+  n_jobs: -1
+  num_samples: 100         # Reduced from 4000
+
+# Hardware Configuration
+hardware:
+  num_gpus: 1              # Single GPU for test
+  memory_limit_per_gpu: 0  # No limit for test
+  mixed_precision: false   # Disabled for test
+  prefetch_buffer: 2
+  num_parallel_calls: -1
+
+# Search Parameters
+search:
+  probability_threshold: 0.5
+  batch_size: 1000
+  sliding_window: true

@@ -1,0 +1,101 @@
+# Default configuration for SETI Signal Detector
+# Based on original paper parameters
+
+# Data Generation Parameters
+data:
+  # Frame dimensions (after downscaling)
+  frame_height: 16          # Time bins per observation
+  frame_width: 512          # Frequency channels (downscaled from 4096)
+  original_width: 4096      # Original frequency channels
+  downscale_factor: 8       # Downscaling factor
+  
+  # Cadence structure
+  num_observations: 6       # A1, B, A2, C, A3, D
+  
+  # Telescope parameters (GBT L-band)
+  df: 2.7939677238464355    # Hz per channel
+  dt: 18.25361108           # seconds per time bin
+  fch1: 6095.214842353016   # MHz center frequency
+
+# Signal Injection Parameters
+signal:
+  snr_min: 10               # Minimum SNR
+  snr_max: 80               # Maximum SNR
+  snr_base: 20              # Base SNR for training
+  snr_range: 40             # SNR variation range
+  
+  # Drift rate (Hz/s) - calculated to traverse full observation
+  drift_rate_factor: 1.0    # Multiplier for base drift rate
+  
+  # Signal width
+  width_base: 50            # Base width in Hz
+  width_drift_factor: 18    # Additional width per Hz/s of drift
+  
+  # Noise parameters
+  noise_mean: 58348559      # Chi-squared noise mean
+  noise_type: 'chi2'        # Noise distribution
+
+# VAE Model Architecture
+model:
+  # Encoder
+  latent_dim: 8             # Latent space dimension
+  dense_units: 512          # Dense layer units
+  kernel_size: [3, 3]       # Convolution kernel size
+  
+  # Regularization
+  l1_weight: 0.001          # L1 activity regularization
+  l2_weight: 0.01           # L2 kernel/bias regularization
+  
+  # Loss weights
+  alpha: 10                 # Contrastive clustering loss weight
+  beta: 0.5                 # KL divergence weight
+  gamma: 0                  # Score loss weight (disabled)
+
+# Training Parameters
+training:
+  # Batch settings
+  batch_size: 1000          # Training batch size
+  validation_batch_size: 2000
+  
+  # Epochs per training cycle
+  epochs_per_cycle: 100
+  num_cycles: 20            # Total training cycles
+  
+  # Dataset sizes
+  num_samples_train: 6000   # Samples per cycle
+  num_samples_val: 1000     # Validation samples
+  
+  # Optimizer
+  learning_rate: 0.001
+  optimizer: 'adam'
+  
+  # Checkpointing
+  checkpoint_dir: 'checkpoints'
+  save_frequency: 1         # Save every N cycles
+
+# Random Forest Classifier
+classifier:
+  n_estimators: 1000        # Number of trees
+  max_features: 'sqrt'      # Features per split
+  bootstrap: true
+  n_jobs: -1                # Use all cores
+  
+  # Training samples
+  num_samples: 4000         # Samples per class
+
+# Hardware Configuration
+hardware:
+  # GPU settings for 2x RTX 4090
+  num_gpus: 2
+  memory_limit_per_gpu: 22000  # MB (leave some headroom)
+  mixed_precision: true        # Use FP16 for faster training
+  
+  # Data loading
+  prefetch_buffer: 4
+  num_parallel_calls: -1       # tf.data.AUTOTUNE
+
+# Inference/Search Parameters
+search:
+  probability_threshold: 0.5   # Classification threshold
+  batch_size: 5000
+  sliding_window: true         # Use sliding window for better coverage
