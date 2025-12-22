@@ -1,5 +1,5 @@
 """Inference and search pipeline modules."""
 
-from .search import SearchPipeline
+from .pipeline import SRTPipeline, SnippetResult, CadenceResult
 
-__all__ = ['SearchPipeline']
+__all__ = ['SRTPipeline', 'SnippetResult', 'CadenceResult']

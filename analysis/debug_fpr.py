@@ -23,8 +23,8 @@ print("DEBUGGING HIGH FALSE POSITIVE RATE")
 print("=" * 70)
 
 # Load models
-ENCODER_PATH = Path(__file__).parent.parent / "results" / "large_scale_training" / "encoder_final.keras"
-RF_PATH = Path(__file__).parent.parent / "results" / "large_scale_training" / "random_forest.joblib"
+ENCODER_PATH = Path(__file__).parent.parent / "results" / "models" / "encoder_final.keras"
+RF_PATH = Path(__file__).parent.parent / "results" / "models" / "random_forest.joblib"
 
 encoder = tf.keras.models.load_model(ENCODER_PATH)
 rf = joblib.load(RF_PATH)

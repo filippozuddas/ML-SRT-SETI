@@ -1,0 +1,25 @@
+# SRT Pipeline Configuration
+# Copy this to configs/srt_config.yaml and customize
+
+# Data specifications
+data:
+  time_bins: 16
+  snippet_width: 4096  # Channels per snippet before downsampling
+  downsample_factor: 8
+  final_freq_bins: 512  # 4096 / 8
+  freq_resolution_hz: 2.79
+
+# Model paths (relative to project root)
+models:
+  encoder: results/models/encoder_final.keras
+  classifier: results/models/random_forest.joblib
+
+# Inference settings
+inference:
+  eti_threshold: 0.5
+  batch_size: 32
+
+# Data directories
+paths:
+  srt_data: data/srt
+  output: results/srt_outputs
