@@ -43,9 +43,9 @@ VOYAGER_FILES = [
     DATA_DIR / "single_coarse_guppi_59046_81628_DIAG_VOYAGER-1_OFF_0016.rawspec.0000.h5", # OFF
 ]
 
-ENCODER_PATH = Path(__file__).parent.parent / "results" / "large_scale_training" / "encoder_final.keras"
-RF_PATH = Path(__file__).parent.parent / "results" / "large_scale_training" / "random_forest.joblib"
-OUTPUT_DIR = Path(__file__).parent.parent / "results" / "voyager_test"
+ENCODER_PATH = Path(__file__).parent.parent / "results" / "models" / "encoder_final.keras"
+RF_PATH = Path(__file__).parent.parent / "results" / "models" / "random_forest.joblib"
+OUTPUT_DIR = Path(__file__).parent.parent / "results" / "tests" / "voyager"
 OUTPUT_DIR.mkdir(parents=True, exist_ok=True)
 THRESHOLD = 0.5
 
@@ -77,10 +77,18 @@ print("=" * 70)
 print("\nExploring first file...")
 first_file = VOYAGER_FILES[0]
 if first_file.exists():
-    wf = Waterfall(str(first_file), load_data=False)
+    wf = Waterfall(str(first_file))
     print(f"  File: {first_file.name}")
     print(f"  Header info:")
     wf.info()
+
+    wf.plot_spectrum(logged=True)
+    plt.savefig(OUTPUT_DIR / "spectrum.png", dpi=300, bbox_inches="tight")
+    plt.close()
+
+    wf.plot_waterfall(f_start=8419.542, f_stop=8419.543)
+    plt.savefig(OUTPUT_DIR / "waterfall.png", dpi=300, bbox_inches="tight")
+    plt.close()
 else:
     print(f"  ❌ File not found: {first_file}")
     print("  Please check the path and try again.")
