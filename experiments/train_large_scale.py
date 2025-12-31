@@ -1,19 +1,22 @@
 """
-Large-Scale Training Pipeline (Paper Parameters).
+Large-Scale Training Pipeline.
 
 This script replicates the original paper training approach:
-- 20 training batches with fresh data each batch
-- 150-100 epochs per batch
-- 5000 samples per batch
+- Multiple training batches with fresh data each batch
+- Epochs per batch with early stopping
 - Uses model.fit() for native multi-GPU support
+- Supports real SRT backgrounds or synthetic noise
 
-Estimated runtime: 6-10 hours on 2x RTX 4090
+Usage:
+    python scripts/train_large_scale.py --plate data/srt_training/srt_backgrounds.npz
+    python scripts/train_large_scale.py --no-plate  # Use synthetic noise
 """
 
 import sys
 from pathlib import Path
 sys.path.insert(0, str(Path(__file__).parent.parent))
 
+import argparse
 import numpy as np
 import tensorflow as tf
 from tqdm import tqdm
@@ -26,6 +29,62 @@ from sklearn.metrics import classification_report, accuracy_score, roc_auc_score
 import joblib
 import time
 import gc
+
+
+def parse_args():
+    parser = argparse.ArgumentParser(
+        description="Large-Scale Training Pipeline for SETI Signal Detection"
+    )
+    
+    # Data configuration
+    parser.add_argument('--plate', '-p', type=str, default=None,
+                        help='Path to SRT plate file (.npz). If not provided, uses synthetic noise.')
+    parser.add_argument('--no-plate', action='store_true',
+                        help='Use synthetic Gaussian noise instead of real backgrounds')
+    
+    # Training configuration
+    parser.add_argument('--batches', '-b', type=int, default=40,
+                        help='Number of training batches (default: 40)')
+    parser.add_argument('--samples', '-n', type=int, default=2500,
+                        help='Samples per batch (default: 2500)')
+    parser.add_argument('--val-samples', type=int, default=500,
+                        help='Validation samples per batch (default: 500)')
+    parser.add_argument('--epochs', '-e', type=int, default=100,
+                        help='Max epochs per batch (default: 100)')
+    parser.add_argument('--batch-size', type=int, default=1000,
+                        help='Training batch size (default: 1000)')
+    
+    # Model hyperparameters
+    parser.add_argument('--snr-base', type=int, default=10,
+                        help='Base SNR for signal injection (default: 10)')
+    parser.add_argument('--snr-range', type=int, default=40,
+                        help='SNR range (default: 40)')
+    parser.add_argument('--beta', type=float, default=1.5,
+                        help='Beta parameter for VAE (default: 1.5)')
+    parser.add_argument('--alpha', type=float, default=10.0,
+                        help='Alpha parameter for clustering loss (default: 10)')
+    parser.add_argument('--latent-dim', type=int, default=8,
+                        help='Latent dimension (default: 8)')
+    parser.add_argument('--lr', type=float, default=0.001,
+                        help='Learning rate (default: 0.001)')
+    
+    # Early stopping
+    parser.add_argument('--patience', type=int, default=15,
+                        help='Early stopping patience (default: 15)')
+    
+    # Output
+    parser.add_argument('--output', '-o', type=str, default='result/real_obs_training',
+                        help='Output directory for checkpoints')
+    
+    # Parallelization
+    parser.add_argument('--workers', '-w', type=int, default=46,
+                        help='Number of CPU workers for data generation (default: 46)')
+    
+    return parser.parse_args()
+
+
+# Parse arguments
+args = parse_args()
 
 # ============================================
 # GPU CONFIGURATION
@@ -42,52 +101,60 @@ else:
     print("⚠ No GPU found - training will be slow!")
 
 print("=" * 70)
-print("SETI Signal Detector - Large-Scale Training (Paper Parameters)")
+print("SETI Signal Detector - Large-Scale Training")
 print("=" * 70)
 
 # ============================================
-# CONFIGURATION (Memory-optimized: 40 batches × 2500 samples)
+# CONFIGURATION FROM ARGS
 # ============================================
-NUM_BATCHES = 20                  # Doubled to maintain total samples
-NUM_SAMPLES_TRAIN = 2500          # Half of original (memory-friendly)
-NUM_SAMPLES_VAL = 500             # Reduced proportionally
-BATCH_SIZE = 1000                 # Unchanged (15 updates/epoch)
-VALIDATION_BATCH_SIZE = 3000      # 500 × 6 = 3000
+NUM_BATCHES = args.batches
+NUM_SAMPLES_TRAIN = args.samples
+NUM_SAMPLES_VAL = args.val_samples
+BATCH_SIZE = args.batch_size
+VALIDATION_BATCH_SIZE = args.val_samples * 6
 
-# Epochs per batch (extended pattern for 40 batches, with early stopping)
-"""EPOCHS_PER_BATCH = [150, 150, 150, 150, 150, 150, 150, 100, 100, 100,
-                   100, 100, 100, 100, 100, 100, 100, 100, 100, 100,
-                   100, 100, 100, 100, 100, 100, 100, 100, 100, 100,
-                   100, 100, 100, 100, 100, 100, 100, 100, 100, 100]"""
+# Epochs per batch
+EPOCHS_PER_BATCH = [min(150, args.epochs)] * 7 + [args.epochs] * (NUM_BATCHES - 7)
+if len(EPOCHS_PER_BATCH) < NUM_BATCHES:
+    EPOCHS_PER_BATCH.extend([args.epochs] * (NUM_BATCHES - len(EPOCHS_PER_BATCH)))
 
-EPOCHS_PER_BATCH = [150, 150, 150, 150, 150, 150, 150, 100, 100, 100,
-                   100, 100, 100, 100, 100, 100, 100, 100, 100, 100]
-
-# SNR settings (paper: snr_base=10, snr_range=40)
-SNR_BASE = 10
-SNR_RANGE = 40
+# SNR settings
+SNR_BASE = args.snr_base
+SNR_RANGE = args.snr_range
 
 # Model hyperparameters
-LEARNING_RATE = 0.001
-LATENT_DIM = 8
+LEARNING_RATE = args.lr
+LATENT_DIM = args.latent_dim
 DENSE_UNITS = 512
-ALPHA = 10
-BETA = 1.5  # Paper: beta=1.5
+ALPHA = args.alpha
+BETA = args.beta
 
-# Early Stopping configuration
-EARLY_STOPPING_PATIENCE = 15      # Stop if no improvement for 15 epochs
-EARLY_STOPPING_MIN_DELTA = 10.0   # Minimum change to qualify as improvement
+# Early Stopping
+EARLY_STOPPING_PATIENCE = args.patience
+EARLY_STOPPING_MIN_DELTA = 10.0
 
-OUTPUT_DIR = Path("checkpoints/large_scale_training")
+# Plate configuration
+USE_SRT_PLATE = args.plate is not None and not args.no_plate
+SRT_PLATE_PATH = args.plate
+
+# Output directory
+OUTPUT_DIR = Path(args.output)
 OUTPUT_DIR.mkdir(parents=True, exist_ok=True)
 
-print(f"\nConfiguration (Paper Parameters):")
+# Workers
+NUM_WORKERS = args.workers
+
+print(f"\nConfiguration:")
 print(f"  Training batches: {NUM_BATCHES}")
 print(f"  Samples per batch: {NUM_SAMPLES_TRAIN}")
-print(f"  Epochs pattern: {EPOCHS_PER_BATCH[0]}-{EPOCHS_PER_BATCH[-1]}")
+print(f"  Epochs per batch: {EPOCHS_PER_BATCH[0]}-{EPOCHS_PER_BATCH[-1]}")
 print(f"  Total epochs: {sum(EPOCHS_PER_BATCH)}")
 print(f"  SNR range: {SNR_BASE} to {SNR_BASE + SNR_RANGE}")
-print(f"  beta: {BETA}")
+print(f"  beta: {BETA}, alpha: {ALPHA}")
+print(f"  Use SRT Plate: {USE_SRT_PLATE}")
+if USE_SRT_PLATE:
+    print(f"  SRT Plate Path: {SRT_PLATE_PATH}")
+print(f"  Workers: {NUM_WORKERS}")
 print(f"  Output: {OUTPUT_DIR}")
 
 # ============================================
@@ -137,21 +204,32 @@ with strategy.scope():
 from multiprocessing import Pool, cpu_count
 import os
 
-# Number of parallel workers (reduced to avoid memory issues)
-NUM_WORKERS = 46
+# Load SRT plate if configured
+SRT_PLATE = None
+if USE_SRT_PLATE:
+    print(f"\nLoading SRT plate from {SRT_PLATE_PATH}...")
+    try:
+        plate_data = np.load(SRT_PLATE_PATH)
+        SRT_PLATE = plate_data['backgrounds']
+        print(f"  Loaded plate shape: {SRT_PLATE.shape}")
+        print(f"  Using {len(SRT_PLATE)} real SRT backgrounds for signal injection")
+    except FileNotFoundError:
+        print(f"  WARNING: SRT plate not found at {SRT_PLATE_PATH}")
+        print(f"  Falling back to synthetic Gaussian noise")
+        SRT_PLATE = None
 
 def _generate_true_sample(args):
     """Worker function for generating a true sample."""
-    seed, snr_base, snr_range = args
+    seed, snr_base, snr_range, plate = args
     params = CadenceParams(fchans=4096, tchans=16, snr_base=snr_base, snr_range=snr_range)
-    cadence_gen = CadenceGenerator(params, seed=seed)
+    cadence_gen = CadenceGenerator(params, plate=plate, seed=seed)
     return cadence_gen.create_true_sample_fast()
 
 def _generate_false_sample(args):
     """Worker function for generating a false sample."""
-    seed, snr_base, snr_range = args
+    seed, snr_base, snr_range, plate = args
     params = CadenceParams(fchans=4096, tchans=16, snr_base=snr_base, snr_range=snr_range)
-    cadence_gen = CadenceGenerator(params, seed=seed)
+    cadence_gen = CadenceGenerator(params, plate=plate, seed=seed)
     return cadence_gen.create_false_sample()
 
 def generate_training_data(num_samples, seed=None):
@@ -168,10 +246,11 @@ def generate_training_data(num_samples, seed=None):
     
     print(f"  Using {NUM_WORKERS} CPU workers for parallel generation...")
     
-    # Prepare arguments with unique seeds
-    vae_args = [(base_seed + i, SNR_BASE, SNR_RANGE) for i in range(num_samples)]
-    true_args = [(base_seed + 10000 + i, SNR_BASE, SNR_RANGE) for i in range(num_samples * 6)]
-    false_args = [(base_seed + 100000 + i, SNR_BASE, SNR_RANGE) for i in range(num_samples * 6)]
+    # Prepare arguments with unique seeds (include plate reference)
+    plate = SRT_PLATE  # Global plate loaded above
+    vae_args = [(base_seed + i, SNR_BASE, SNR_RANGE, plate) for i in range(num_samples)]
+    true_args = [(base_seed + 10000 + i, SNR_BASE, SNR_RANGE, plate) for i in range(num_samples * 6)]
+    false_args = [(base_seed + 100000 + i, SNR_BASE, SNR_RANGE, plate) for i in range(num_samples * 6)]
     
     # Generate in parallel
     with Pool(NUM_WORKERS) as pool:
