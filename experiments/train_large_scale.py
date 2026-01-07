@@ -73,8 +73,14 @@ def parse_args():
                         help='Early stopping patience (default: 15)')
     
     # Output
-    parser.add_argument('--output', '-o', type=str, default='result/real_obs_training',
+    parser.add_argument('--output', '-o', type=str, default='/content/filippo/ML-SRT-SETI/results/real_obs_training',
                         help='Output directory for checkpoints')
+    
+    # Resume training
+    parser.add_argument('--resume', '-r', type=str, default=None,
+                        help='Path to encoder checkpoint to resume from (e.g., encoder_batch_7.keras)')
+    parser.add_argument('--start-batch', type=int, default=0,
+                        help='Batch number to start from (0-indexed, default: 0)')
     
     # Parallelization
     parser.add_argument('--workers', '-w', type=int, default=46,
@@ -131,7 +137,7 @@ BETA = args.beta
 
 # Early Stopping
 EARLY_STOPPING_PATIENCE = args.patience
-EARLY_STOPPING_MIN_DELTA = 10.0
+EARLY_STOPPING_MIN_DELTA = 3
 
 # Plate configuration
 USE_SRT_PLATE = args.plate is not None and not args.no_plate
@@ -199,6 +205,36 @@ with strategy.scope():
     )
 
 # ============================================
+# RESUME FROM CHECKPOINT (if provided)
+# ============================================
+if args.resume:
+    print(f"\n{'='*70}")
+    print("RESUMING FROM CHECKPOINT")
+    print(f"{'='*70}")
+    resume_path = Path(args.resume)
+    if resume_path.exists():
+        print(f"  Loading encoder from: {resume_path}")
+        model.encoder.load_weights(str(resume_path))
+        
+        # Try to load matching decoder
+        decoder_path = str(resume_path).replace('encoder_', 'decoder_')
+        if Path(decoder_path).exists():
+            print(f"  Loading decoder from: {decoder_path}")
+            model.decoder.load_weights(decoder_path)
+        else:
+            print(f"  ⚠ No matching decoder found at {decoder_path}")
+        
+        print(f"  ✓ Checkpoint loaded successfully!")
+        print(f"  Will start from batch {args.start_batch + 1}")
+    else:
+        print(f"  ❌ ERROR: Checkpoint not found: {resume_path}")
+        print(f"  Starting fresh training instead...")
+
+# Global best tracking
+GLOBAL_BEST_VAL_LOSS = float('inf')
+GLOBAL_BEST_BATCH = -1
+
+# ============================================
 # HELPER FUNCTIONS
 # ============================================
 from multiprocessing import Pool, cpu_count
@@ -206,11 +242,14 @@ import os
 
 # Load SRT plate if configured
 SRT_PLATE = None
+SRT_PLATE_PATH_FOR_WORKERS = None  # Path for workers to load
+
 if USE_SRT_PLATE:
     print(f"\nLoading SRT plate from {SRT_PLATE_PATH}...")
     try:
         plate_data = np.load(SRT_PLATE_PATH)
         SRT_PLATE = plate_data['backgrounds']
+        SRT_PLATE_PATH_FOR_WORKERS = SRT_PLATE_PATH
         print(f"  Loaded plate shape: {SRT_PLATE.shape}")
         print(f"  Using {len(SRT_PLATE)} real SRT backgrounds for signal injection")
     except FileNotFoundError:
@@ -218,18 +257,29 @@ if USE_SRT_PLATE:
         print(f"  Falling back to synthetic Gaussian noise")
         SRT_PLATE = None
 
+# Global variable for workers (set by initializer)
+_WORKER_PLATE = None
+_WORKER_PLATE_PATH = None
+
+def _init_worker(plate_path):
+    """Initialize worker with plate loaded from file."""
+    global _WORKER_PLATE, _WORKER_PLATE_PATH
+    if plate_path is not None and plate_path != _WORKER_PLATE_PATH:
+        _WORKER_PLATE = np.load(plate_path)['backgrounds']
+        _WORKER_PLATE_PATH = plate_path
+
 def _generate_true_sample(args):
     """Worker function for generating a true sample."""
-    seed, snr_base, snr_range, plate = args
+    seed, snr_base, snr_range = args
     params = CadenceParams(fchans=4096, tchans=16, snr_base=snr_base, snr_range=snr_range)
-    cadence_gen = CadenceGenerator(params, plate=plate, seed=seed)
+    cadence_gen = CadenceGenerator(params, plate=_WORKER_PLATE, seed=seed)
     return cadence_gen.create_true_sample_fast()
 
 def _generate_false_sample(args):
     """Worker function for generating a false sample."""
-    seed, snr_base, snr_range, plate = args
+    seed, snr_base, snr_range = args
     params = CadenceParams(fchans=4096, tchans=16, snr_base=snr_base, snr_range=snr_range)
-    cadence_gen = CadenceGenerator(params, plate=plate, seed=seed)
+    cadence_gen = CadenceGenerator(params, plate=_WORKER_PLATE, seed=seed)
     return cadence_gen.create_false_sample()
 
 def generate_training_data(num_samples, seed=None):
@@ -246,14 +296,13 @@ def generate_training_data(num_samples, seed=None):
     
     print(f"  Using {NUM_WORKERS} CPU workers for parallel generation...")
     
-    # Prepare arguments with unique seeds (include plate reference)
-    plate = SRT_PLATE  # Global plate loaded above
-    vae_args = [(base_seed + i, SNR_BASE, SNR_RANGE, plate) for i in range(num_samples)]
-    true_args = [(base_seed + 10000 + i, SNR_BASE, SNR_RANGE, plate) for i in range(num_samples * 6)]
-    false_args = [(base_seed + 100000 + i, SNR_BASE, SNR_RANGE, plate) for i in range(num_samples * 6)]
+    # Prepare arguments with unique seeds (NO plate - loaded by workers)
+    vae_args = [(base_seed + i, SNR_BASE, SNR_RANGE) for i in range(num_samples)]
+    true_args = [(base_seed + 10000 + i, SNR_BASE, SNR_RANGE) for i in range(num_samples * 6)]
+    false_args = [(base_seed + 100000 + i, SNR_BASE, SNR_RANGE) for i in range(num_samples * 6)]
     
-    # Generate in parallel
-    with Pool(NUM_WORKERS) as pool:
+    # Generate in parallel with initializer
+    with Pool(NUM_WORKERS, initializer=_init_worker, initargs=(SRT_PLATE_PATH_FOR_WORKERS,)) as pool:
         print(f"  Generating {num_samples} VAE samples...")
         vae_cadences = list(tqdm(pool.imap(_generate_true_sample, vae_args), 
                                   total=num_samples, desc="VAE", leave=False))
@@ -346,9 +395,14 @@ print("=" * 70)
 all_histories = []
 total_start_time = time.time()
 
-for batch_idx in range(NUM_BATCHES):
+# Start batch (for resume)
+START_BATCH = args.start_batch
+
+for batch_idx in range(START_BATCH, NUM_BATCHES):
     print(f"\n{'='*70}")
     print(f"BATCH {batch_idx + 1}/{NUM_BATCHES}")
+    if batch_idx > START_BATCH or args.resume:
+        print(f"  (Global Best: batch {GLOBAL_BEST_BATCH + 1}, val_loss={GLOBAL_BEST_VAL_LOSS:.2f})")
     print(f"{'='*70}")
     
     batch_start_time = time.time()
@@ -405,9 +459,42 @@ for batch_idx in range(NUM_BATCHES):
     if actual_epochs < epochs_this_batch:
         print(f"  Early stopped at epoch {actual_epochs}/{epochs_this_batch}")
     
+    # Get best validation loss from this batch
+    batch_best_val_loss = min(history.history['val_loss'])
+    
+    # Check for catastrophic degradation (>5% increase from global best)
+    CATASTROPHIC_THRESHOLD = 1.05  # 5% tolerance
+    if GLOBAL_BEST_VAL_LOSS < float('inf'):
+        if batch_best_val_loss > GLOBAL_BEST_VAL_LOSS * CATASTROPHIC_THRESHOLD:
+            print(f"\n  ⚠️  CATASTROPHIC DEGRADATION DETECTED!")
+            print(f"      Batch best: {batch_best_val_loss:.2f} vs Global best: {GLOBAL_BEST_VAL_LOSS:.2f}")
+            print(f"      Rolling back to global best (batch {GLOBAL_BEST_BATCH + 1})...")
+            
+            # Reload global best weights
+            global_best_encoder = OUTPUT_DIR / 'encoder_global_best.keras'
+            global_best_decoder = OUTPUT_DIR / 'decoder_global_best.keras'
+            if global_best_encoder.exists():
+                model.encoder.load_weights(str(global_best_encoder))
+                model.decoder.load_weights(str(global_best_decoder))
+                print(f"      ✓ Rolled back to global best checkpoint")
+            else:
+                print(f"      ❌ No global best checkpoint found - continuing with degraded weights")
+        else:
+            print(f"  ✓ Batch acceptable (val_loss={batch_best_val_loss:.2f})")
+    
+    # Update global best if this batch is better
+    if batch_best_val_loss < GLOBAL_BEST_VAL_LOSS:
+        GLOBAL_BEST_VAL_LOSS = batch_best_val_loss
+        GLOBAL_BEST_BATCH = batch_idx
+        print(f"  🏆 NEW GLOBAL BEST! val_loss={batch_best_val_loss:.2f}")
+        
+        # Save global best checkpoint
+        model.encoder.save(str(OUTPUT_DIR / 'encoder_global_best.keras'))
+        model.decoder.save(str(OUTPUT_DIR / 'decoder_global_best.keras'))
+    
     all_histories.append(history)
     
-    # Save checkpoint
+    # Save per-batch checkpoint
     model.encoder.save(str(OUTPUT_DIR / f'encoder_batch_{batch_idx + 1}.keras'))
     model.decoder.save(str(OUTPUT_DIR / f'decoder_batch_{batch_idx + 1}.keras'))
     
@@ -418,13 +505,39 @@ for batch_idx in range(NUM_BATCHES):
     print(f"\nBatch {batch_idx + 1} completed in {batch_time/60:.1f} minutes")
     print(f"  Final loss: {history.history['loss'][-1]:.2f}")
     
-    # Cleanup
+    # Cleanup - aggressive memory management to prevent RAM saturation
     del vae_train, true_train, false_train
     del vae_val, true_val, false_val
     del x_train, y_train, x_val, y_val
+    del history
+    #gc.collect()
+    
+    # Clear TensorFlow internal caches
+    """tf.keras.backend.clear_session()
+    
+    # Rebuild model after clear_session (keeps weights via global best checkpoint)
+    if (OUTPUT_DIR / 'encoder_global_best.keras').exists():
+        with strategy.scope():
+            model = build_vae(
+                input_shape=(16, 512, 1),
+                latent_dim=LATENT_DIM,
+                dense_units=DENSE_UNITS,
+                alpha=ALPHA,
+                beta=BETA,
+                learning_rate=LEARNING_RATE
+            )
+            model.encoder.load_weights(str(OUTPUT_DIR / 'encoder_global_best.keras'))
+            model.decoder.load_weights(str(OUTPUT_DIR / 'decoder_global_best.keras'))
+    """
     gc.collect()
 
-# Save final model
+# Save final model (use global best if available)
+global_best_encoder = OUTPUT_DIR / 'encoder_global_best.keras'
+if global_best_encoder.exists():
+    print(f"\nUsing global best checkpoint (batch {GLOBAL_BEST_BATCH + 1}) as final model...")
+    model.encoder.load_weights(str(global_best_encoder))
+    model.decoder.load_weights(str(OUTPUT_DIR / 'decoder_global_best.keras'))
+
 model.encoder.save(str(OUTPUT_DIR / 'encoder_final.keras'))
 model.decoder.save(str(OUTPUT_DIR / 'decoder_final.keras'))
 
@@ -432,6 +545,7 @@ total_time = time.time() - total_start_time
 print(f"\n{'='*70}")
 print(f"VAE TRAINING COMPLETE")
 print(f"Total training time: {total_time/60:.1f} minutes ({total_time/3600:.1f} hours)")
+print(f"Global best: batch {GLOBAL_BEST_BATCH + 1} with val_loss={GLOBAL_BEST_VAL_LOSS:.2f}")
 print(f"{'='*70}")
 
 # ============================================

@@ -1,9 +1,12 @@
 #!/usr/bin/env python3
 """
-SRT Dataset Builder.
+SRT/GBT Dataset Builder.
 
-Extracts RAW background snippets from SRT HDF5 observation files
+Extracts RAW background snippets from HDF5 observation files
 for use with CadenceGenerator in training.
+
+Supports frequency band separation (6 GHz vs 18 GHz bands)
+and train/inference splitting.
 """
 
 import os
@@ -19,6 +22,21 @@ from tqdm import tqdm
 import warnings
 
 
+# Frequency band configuration
+BAND_CONFIG = {
+    '6GHz': {
+        'name': 'C-band (~6.8 GHz)',
+        'f_min': 6000,
+        'f_max': 8000,
+    },
+    '18GHz': {
+        'name': 'K-band (~18 GHz)', 
+        'f_min': 17000,
+        'f_max': 19000,
+    }
+}
+
+
 @dataclass
 class CadenceInfo:
     """Information about a cadence (6 ON/OFF files)."""
@@ -28,6 +46,7 @@ class CadenceInfo:
     n_channels: int = 0
     freq_start: float = 0.0
     freq_end: float = 0.0
+    freq_band: str = 'unknown'  # '6GHz', '18GHz', or 'unknown'
     
     @property
     def is_complete(self) -> bool:
@@ -99,51 +118,100 @@ class SRTDatasetBuilder:
         }
     
     def group_into_cadences(self, files: List[Path]) -> Dict[str, CadenceInfo]:
-        """Group files into cadences by target name."""
+        """Group files into cadences by target name with timestamp-based validation."""
+        import re
+        
+        def extract_timestamp(filepath: Path) -> int:
+            """Extract timestamp from GUPPI filename for sorting."""
+            match = re.search(r'guppi_(\d+)_(\d+)_', filepath.name)
+            if match:
+                return int(match.group(1)) * 1000000 + int(match.group(2))
+            return 0
+        
         groups = defaultdict(list)
         
         for f in files:
             info = self.parse_filename(f)
             if info:
-                key = f"{info['target']}_{info['date']}"
+                # Key by target + date + directory (to separate different frequency observations)
+                key = f"{info['target']}_{info['date']}_{f.parent}"
+                info['timestamp'] = extract_timestamp(f)
                 groups[key].append(info)
         
         cadences = {}
+        invalid_count = 0
+        
         for key, file_infos in groups.items():
-            file_infos.sort(key=lambda x: str(x['filepath']))
+            # Sort by TIMESTAMP (critical for correct ON/OFF order)
+            file_infos.sort(key=lambda x: x['timestamp'])
             
-            on_files = [f for f in file_infos if f['obs_type'] == 'ON']
-            off_files = [f for f in file_infos if f['obs_type'] == 'OFF']
+            # Check if we have exactly 6 files
+            if len(file_infos) != 6:
+                invalid_count += 1
+                continue
             
-            if len(on_files) >= 3 and len(off_files) >= 3:
-                # Interleave: ON/OFF/ON/OFF/ON/OFF
-                cadence_files = []
-                for i in range(min(3, len(on_files), len(off_files))):
-                    cadence_files.append(on_files[i]['filepath'])
-                    cadence_files.append(off_files[i]['filepath'])
-                
-                cadence = CadenceInfo(
-                    target_name=file_infos[0]['target'],
-                    date=file_infos[0]['date'],
-                    files=cadence_files[:6]
-                )
-                
-                if cadence.is_complete:
-                    try:
-                        with h5py.File(cadence_files[0], 'r') as f:
-                            header = dict(f['data'].attrs)
-                            cadence.n_channels = header.get('nchans', 0)
-                            cadence.freq_start = header.get('fch1', 0.0)
-                    except:
-                        pass
-                
-                cadences[key] = cadence
+            # Validate ON/OFF pattern: should be ON, OFF, ON, OFF, ON, OFF
+            expected_pattern = ['ON', 'OFF', 'ON', 'OFF', 'ON', 'OFF']
+            actual_pattern = [f['obs_type'] for f in file_infos]
+            
+            if actual_pattern != expected_pattern:
+                invalid_count += 1
+                continue
+            
+            # Valid cadence!
+            cadence_files = [f['filepath'] for f in file_infos]
+            
+            cadence = CadenceInfo(
+                target_name=file_infos[0]['target'],
+                date=file_infos[0]['date'],
+                files=cadence_files
+            )
+            
+            if cadence.is_complete:
+                try:
+                    with h5py.File(cadence_files[0], 'r') as f:
+                        header = dict(f['data'].attrs)
+                        cadence.n_channels = header.get('nchans', 0)
+                        cadence.freq_start = header.get('fch1', 0.0)
+                        
+                        # Determine frequency band
+                        for band_name, config in BAND_CONFIG.items():
+                            if config['f_min'] <= cadence.freq_start <= config['f_max']:
+                                cadence.freq_band = band_name
+                                break
+                except Exception as e:
+                    # Skip corrupt files
+                    continue
+            
+            cadences[key] = cadence
+        
+        if invalid_count > 0:
+            print(f"  (Skipped {invalid_count} incomplete/invalid cadences)")
         
         self.cadences = cadences
         return cadences
     
+    def get_cadences_by_band(self, band: str = None) -> Dict[str, List[CadenceInfo]]:
+        """Get cadences grouped by frequency band.
+        
+        Args:
+            band: If specified, return only cadences for this band ('6GHz' or '18GHz')
+            
+        Returns:
+            Dict with band names as keys and lists of CadenceInfo as values
+        """
+        complete = [c for c in self.cadences.values() if c.is_complete]
+        
+        by_band = defaultdict(list)
+        for c in complete:
+            by_band[c.freq_band].append(c)
+        
+        if band:
+            return {band: by_band.get(band, [])}
+        return dict(by_band)
+    
     def print_cadence_summary(self):
-        """Print summary of found cadences."""
+        """Print summary of found cadences with band breakdown."""
         complete = [c for c in self.cadences.values() if c.is_complete]
         
         print(f"\n{'='*60}")
@@ -151,15 +219,26 @@ class SRTDatasetBuilder:
         print(f"{'='*60}")
         print(f"  Complete cadences: {len(complete)}")
         
+        # Band breakdown
+        by_band = self.get_cadences_by_band()
+        print(f"\n  By frequency band:")
+        for band_name, config in BAND_CONFIG.items():
+            band_cadences = by_band.get(band_name, [])
+            print(f"    {config['name']}: {len(band_cadences)} cadences")
+        
+        unknown = by_band.get('unknown', [])
+        if unknown:
+            print(f"    Unknown band: {len(unknown)} cadences")
+        
         if complete:
             total_snippets = sum(c.n_snippets for c in complete)
-            print(f"  Total potential snippets: {total_snippets:,}")
+            print(f"\n  Total potential snippets: {total_snippets:,}")
             
-            print(f"\n  Cadences:")
-            for c in complete[:10]:
-                print(f"    - {c.target_name} ({c.date}): {c.n_snippets:,} snippets")
-            if len(complete) > 10:
-                print(f"    ... and {len(complete) - 10} more")
+            print(f"\n  Sample cadences:")
+            for c in complete[:5]:
+                print(f"    - {c.target_name} ({c.freq_band}): {c.n_snippets:,} snippets")
+            if len(complete) > 5:
+                print(f"    ... and {len(complete) - 5} more")
     
     def extract_backgrounds(self, 
                            cadence: CadenceInfo,
@@ -185,12 +264,14 @@ class SRTDatasetBuilder:
         
         # Load all 6 observations
         cadence_data = []
-        for filepath in cadence.files:
+        for i, filepath in enumerate(cadence.files):
+            print(f"\n    Loading file {i+1}/6: {filepath.name}...", end=" ", flush=True)
             with warnings.catch_warnings():
                 warnings.simplefilter("ignore")
                 wf = Waterfall(str(filepath))
             data = wf.data.squeeze()
             cadence_data.append(data)
+            print(f"✓ ({data.shape})")
         
         # Stack: (6, time, freq)
         cadence_array = np.stack(cadence_data, axis=0)
@@ -310,17 +391,21 @@ class SRTDatasetBuilder:
 def main():
     import argparse
     
-    parser = argparse.ArgumentParser(description="Extract SRT backgrounds for training")
+    parser = argparse.ArgumentParser(description="Extract backgrounds for training (supports band separation)")
     parser.add_argument('--scan', '-s', nargs='+', required=True,
                         help='Directories to scan for HDF5 files')
     parser.add_argument('--output', '-o', default='data/srt_training',
                         help='Output directory')
     parser.add_argument('--snippets-per-cadence', '-n', type=int, default=500,
                         help='Max snippets per cadence')
-    parser.add_argument('--max-snippets', '-m', type=int, default=20000,
-                        help='Max total snippets')
-    parser.add_argument('--name', default='srt_backgrounds',
-                        help='Output dataset name')
+    parser.add_argument('--max-snippets', '-m', type=int, default=15000,
+                        help='Max total snippets per band')
+    parser.add_argument('--name', default='backgrounds',
+                        help='Output dataset name prefix')
+    parser.add_argument('--band', '-b', choices=['6GHz', '18GHz', 'all'], default='all',
+                        help='Frequency band to process (default: all)')
+    parser.add_argument('--training-cadences', '-t', type=int, default=None,
+                        help='Number of cadences to use for training (rest saved for inference)')
     parser.add_argument('--list-only', action='store_true',
                         help='Only list cadences, do not extract')
     
@@ -337,12 +422,55 @@ def main():
     builder.group_into_cadences(all_files)
     builder.print_cadence_summary()
     
-    if not args.list_only:
+    if args.list_only:
+        return
+    
+    # Get cadences by band
+    bands_to_process = [args.band] if args.band != 'all' else list(BAND_CONFIG.keys())
+    
+    for band_name in bands_to_process:
+        by_band = builder.get_cadences_by_band(band_name)
+        band_cadences = by_band.get(band_name, [])
+        
+        if not band_cadences:
+            print(f"\n⚠️  No cadences found for {band_name}")
+            continue
+        
+        print(f"\n{'='*60}")
+        print(f"PROCESSING: {BAND_CONFIG[band_name]['name']}")
+        print(f"{'='*60}")
+        print(f"  Cadences: {len(band_cadences)}")
+        
+        # Split into training vs inference if requested
+        if args.training_cadences and args.training_cadences < len(band_cadences):
+            training_cadences = band_cadences[:args.training_cadences]
+            inference_cadences = band_cadences[args.training_cadences:]
+            
+            print(f"  Training: {len(training_cadences)} cadences")
+            print(f"  Inference: {len(inference_cadences)} cadences")
+            
+            # Save inference cadence list
+            inference_path = builder.output_dir / f"inference_cadences_{band_name}.txt"
+            with open(inference_path, 'w') as f:
+                for c in inference_cadences:
+                    files_str = ','.join(str(fp) for fp in c.files)
+                    f.write(f"{c.target_name}|{files_str}\n")
+            print(f"  Saved: {inference_path}")
+        else:
+            training_cadences = band_cadences
+        
+        # Build dataset
+        output_name = f"{args.name}_{band_name}"
         builder.build_training_dataset(
+            cadences=training_cadences,
             snippets_per_cadence=args.snippets_per_cadence,
             max_total_snippets=args.max_snippets,
-            output_name=args.name
+            output_name=output_name
         )
+    
+    print(f"\n{'='*60}")
+    print("COMPLETE")
+    print(f"{'='*60}")
 
 
 if __name__ == '__main__':

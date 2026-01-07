@@ -28,8 +28,8 @@ print("=" * 70)
 # ============================================
 # CONFIGURATION
 # ============================================
-ENCODER_PATH = Path(__file__).parent.parent / "results" / "large_scale_training" / "encoder_final.keras"
-RF_PATH = Path(__file__).parent.parent / "results" / "large_scale_training" / "random_forest.joblib"
+ENCODER_PATH = Path(__file__).parent.parent / "results" / "real_obs_training" / "encoder_final.keras"
+RF_PATH = Path(__file__).parent.parent / "results" / "real_obs_training" / "random_forest.joblib"
 OUTPUT_DIR = Path(__file__).parent.parent / "results" / "rfi_eti_test"
 OUTPUT_DIR.mkdir(parents=True, exist_ok=True)
 THRESHOLD = 0.5

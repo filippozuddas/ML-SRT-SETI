@@ -3,3 +3,4 @@
 *.pcy
 *.h5
 __pycache__
+*.keras
