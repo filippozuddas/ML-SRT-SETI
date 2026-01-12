@@ -27,10 +27,10 @@ print("=" * 70)
 # ============================================
 # CONFIGURATION
 # ============================================
-ENCODER_PATH = Path("/content/filippo/ML-SRT-SETI/results/real_obs_training/encoder_final.keras")
-RF_PATH = Path("/content/filippo/ML-SRT-SETI/results/real_obs_training/random_forest.joblib")
-PLATE_PATH = Path("/content/filippo/ML-SRT-SETI/data/srt_training/srt_backgrounds.npz")
-OUTPUT_DIR = Path("/content/filippo/ML-SRT-SETI/results/real_obs_training")
+ENCODER_PATH = Path("/content/filippo/ML-SRT-SETI/results/real_obs_training/K_band/encoder_final.keras")
+RF_PATH = Path("/content/filippo/ML-SRT-SETI/results/real_obs_training/K_band/random_forest.joblib")
+PLATE_PATH = Path("/content/filippo/ML-SRT-SETI/data/srt_training/backgrounds_18GHz.npz")
+OUTPUT_DIR = Path("/content/filippo/ML-SRT-SETI/results/real_obs_training/K_band")
 
 N_EVAL_SAMPLES = 2000  # Number of cadences for evaluation
 

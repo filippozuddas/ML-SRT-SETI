@@ -43,8 +43,8 @@ VOYAGER_FILES = [
     DATA_DIR / "single_coarse_guppi_59046_81628_DIAG_VOYAGER-1_OFF_0016.rawspec.0000.h5", # OFF
 ]
 
-ENCODER_PATH = Path(__file__).parent.parent / "results" / "real_obs_training" / "encoder_final.keras"
-RF_PATH = Path(__file__).parent.parent / "results" / "real_obs_training" / "random_forest.joblib"
+ENCODER_PATH = Path(__file__).parent.parent / "results" / "real_obs_training" / "K_band" / "encoder_final.keras"
+RF_PATH = Path(__file__).parent.parent / "results" / "real_obs_training" / "K_band" / "random_forest.joblib"
 OUTPUT_DIR = Path(__file__).parent.parent / "results" / "tests" / "voyager"
 OUTPUT_DIR.mkdir(parents=True, exist_ok=True)
 THRESHOLD = 0.5

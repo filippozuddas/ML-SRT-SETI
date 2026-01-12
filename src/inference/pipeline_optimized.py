@@ -16,9 +16,8 @@ from dataclasses import dataclass, field
 from typing import List, Tuple, Optional, Union
 import warnings
 from blimpy import Waterfall
-from numba import jit, prange
 
-from ..utils.preprocessing import normalize_log
+from ..utils.preprocessing import preprocess, downscale
 
 
 @dataclass
@@ -47,136 +46,202 @@ class CadenceResult:
     
     @property
     def top_candidates(self) -> List[SnippetResult]:
+        """Get top 10 candidates sorted by probability."""
         return sorted(self.snippets, key=lambda x: x.eti_probability, reverse=True)[:10]
     
-    def to_dict(self) -> dict:
-        return {
-            'source_name': self.source_name,
-            'n_snippets': len(self.snippets),
-            'n_detections': self.n_detections,
-            'top_candidates': [
-                {'freq_mhz': s.freq_mhz, 'probability': s.eti_probability, 'center_channel': s.center_channel}
-                for s in self.top_candidates
-            ]
-        }
+    def get_candidates(self, threshold: float = 0.5) -> List[SnippetResult]:
+        """Get all candidates above threshold."""
+        return [s for s in self.snippets if s.eti_probability >= threshold]
 
 
 class SRTPipelineOptimized:
     """
-    Optimized SRT inference pipeline with chunked frequency processing.
+    Optimized inference pipeline for SRT data.
     
-    Key optimizations:
-    - Processes frequency band in chunks (like original code)
-    - Uses blimpy f_start/f_stop for partial loading
-    - Batch encoding for GPU efficiency
-    - Memory cleanup after each chunk
+    Processes large HDF5 files in frequency chunks to manage memory
+    while maintaining full cadence analysis capability.
     """
     
-    SNIPPET_WIDTH = 4096
-    DOWNSAMPLE_FACTOR = 8
-    FINAL_FREQ_BINS = SNIPPET_WIDTH // DOWNSAMPLE_FACTOR
-    TIME_BINS = 16
-    LATENT_DIM = 8
-    ETI_THRESHOLD = 0.9
+    SNIPPET_WIDTH = 4096      # Channels per snippet
+    FINAL_FREQ_BINS = 512     # After downsampling
+    DOWNSAMPLE_FACTOR = 8     # 4096 / 512
     
-    def __init__(self,
+    def __init__(self, 
                  encoder_path: Union[str, Path],
-                 classifier_path: Union[str, Path],
-                 threshold: float = 0.9,
+                 classifier_path: Union[str, Path] = None,
+                 rf_path: Union[str, Path] = None,
+                 threshold: float = 0.5,
                  n_chunks: int = 8,
                  batch_size: int = 256,
+                 overlap: bool = False,
                  verbose: bool = True):
         """
-        Initialize optimized pipeline.
+        Initialize the optimized pipeline.
         
         Args:
-            encoder_path: Path to encoder model
-            classifier_path: Path to classifier
-            threshold: ETI detection threshold
-            n_chunks: Number of frequency chunks to process
-            batch_size: Batch size for GPU encoding
-            verbose: Print progress
+            encoder_path: Path to VAE encoder model
+            classifier_path: Path to Random Forest classifier (alias for rf_path)
+            rf_path: Path to Random Forest classifier
+            threshold: Classification threshold
+            n_chunks: Number of chunks to split frequency band into
+            batch_size: Batch size for encoding
+            overlap: Use 50% overlapping windows for better signal coverage
+            verbose: Print progress messages
         """
+        # Support both parameter names
+        rf_path = classifier_path or rf_path
+        if rf_path is None:
+            raise ValueError("Must provide classifier_path or rf_path")
+        
         self.threshold = threshold
         self.n_chunks = n_chunks
+        self.overlap = overlap
         self.batch_size = batch_size
         self.verbose = verbose
         
+        # Load models
         if self.verbose:
             print("Loading models...")
-        
-        self.encoder = self._load_encoder(encoder_path)
-        self.classifier = joblib.load(classifier_path)
-        
+        self.encoder = tf.keras.models.load_model(encoder_path)
+        self.rf = joblib.load(rf_path)
         if self.verbose:
             print(f"  Encoder: {encoder_path}")
-            print(f"  Classifier: {classifier_path}")
+            print(f"  Classifier: {rf_path}")
             print(f"  Chunks: {n_chunks}")
             print(f"  Batch size: {batch_size}")
     
-    def _load_encoder(self, path: Union[str, Path]) -> tf.keras.Model:
-        path = Path(path)
+    def process_cadence(self, 
+                        cadence_files: List[Union[str, Path]] = None,
+                        file_paths: List[Union[str, Path]] = None,
+                        source_name: str = "Unknown") -> CadenceResult:
+        """
+        Process a full cadence with chunked loading.
+        
+        Args:
+            cadence_files: List of 6 HDF5 file paths (ON, OFF, ON, OFF, ON, OFF)
+            file_paths: Alias for cadence_files (for CLI compatibility)
+            source_name: Name of the source
+            
+        Returns:
+            CadenceResult with all snippet classifications
+        """
+        # Support both parameter names
+        cadence_files = cadence_files or file_paths
+        if cadence_files is None:
+            raise ValueError("Must provide cadence_files or file_paths")
+        
+        if len(cadence_files) != 6:
+            raise ValueError(f"Expected 6 files, got {len(cadence_files)}")
+        
+        # Get observation info from first file
         with warnings.catch_warnings():
             warnings.simplefilter("ignore")
-            return tf.keras.models.load_model(str(path), compile=False)
+            wf = Waterfall(str(cadence_files[0]), load_data=False)
+        
+        total_channels = wf.header['nchans']
+        fch1 = wf.header['fch1']
+        foff = wf.header['foff']
+        bandwidth = abs(foff) * total_channels
+        
+        print(f"\n{'='*60}")
+        print(f"SRT OPTIMIZED PIPELINE - CHUNKED PROCESSING")
+        print(f"{'='*60}")
+        print(f"\nObservation info:")
+        print(f"  Source: {source_name}")
+        print(f"  Channels: {total_channels:,}")
+        print(f"  Bandwidth: {bandwidth:.2f} MHz")
+        print(f"  Frequency: {fch1:.2f} - {fch1 + total_channels * foff:.2f} MHz")
+        
+        # Calculate chunk boundaries
+        chunk_size = total_channels // self.n_chunks
+        print(f"\nProcessing in {self.n_chunks} chunks (~{abs(foff) * chunk_size:.1f} MHz each)")
+        
+        all_snippets = []
+        
+        for chunk_idx in range(self.n_chunks):
+            # Calculate frequency range for this chunk
+            f_start_chan = chunk_idx * chunk_size
+            f_end_chan = (chunk_idx + 1) * chunk_size if chunk_idx < self.n_chunks - 1 else total_channels
+            
+            f_start = fch1 + f_start_chan * foff
+            f_end = fch1 + f_end_chan * foff
+            
+            # Ensure f_start < f_end for loading
+            if f_start > f_end:
+                f_start, f_end = f_end, f_start
+            
+            print(f"\n--- Chunk {chunk_idx + 1}/{self.n_chunks}: {f_start:.2f} - {f_end:.2f} MHz ---")
+            
+            # Load chunk from all 6 files
+            print("  Loading...")
+            chunk_data = self._load_chunk(cadence_files, f_start, f_end)
+            print(f"  Loaded shape: {chunk_data.shape}")
+            
+            # Extract and process snippets
+            # Pass both f_start and f_end for correct frequency calculation
+            snippets = self.extract_and_process_snippets(
+                chunk_data, f_start, f_end, foff
+            )
+            print(f"  Snippets: {len(snippets)}")
+            
+            if len(snippets) == 0:
+                continue
+            
+            # Encode in batches
+            print("  Encoding...")
+            all_processed = [s[2] for s in snippets]
+            latents = self.batch_encode(all_processed)
+            
+            # Classify
+            print("  Classifying...")
+            probs = self.rf.predict_proba(latents)[:, 1]
+            
+            # Create results
+            for i, (center_chan, freq_mhz, _) in enumerate(snippets):
+                result = SnippetResult(
+                    eti_probability=float(probs[i]),
+                    is_eti=probs[i] >= self.threshold,
+                    center_channel=f_start_chan + center_chan,
+                    freq_mhz=freq_mhz,
+                    latent_features=latents[i]
+                )
+                all_snippets.append(result)
+            
+            # Report progress
+            n_candidates = sum(1 for s in all_snippets if s.is_eti)
+            print(f"  ETI candidates so far: {n_candidates}")
+            
+            # Clear memory
+            del chunk_data, snippets, all_processed, latents
+            gc.collect()
+        
+        result = CadenceResult(source_name=source_name, snippets=all_snippets)
+        
+        # Summary
+        print(f"\n{'='*60}")
+        print(f"RESULTS SUMMARY")
+        print(f"{'='*60}")
+        print(f"  Total snippets: {len(all_snippets)}")
+        print(f"  ETI detections: {result.n_detections}")
+        
+        if result.n_detections > 0:
+            print(f"\n  Top candidates:")
+            for i, cand in enumerate(result.top_candidates[:5]):
+                print(f"    {i+1}. {cand.freq_mhz:.6f} MHz - P(ETI)={cand.eti_probability:.3f}")
+        
+        return result
     
-    def _log(self, message: str):
-        if self.verbose:
-            print(message)
-    
-    def get_frequency_info(self, file_path: str) -> dict:
-        """Get frequency range from file header without loading data."""
-        with warnings.catch_warnings():
-            warnings.simplefilter("ignore")
-            wf = Waterfall(file_path, load_data=False)
-        
-        header = wf.header
-        fch1 = header['fch1']
-        foff = header['foff']
-        nchans = header['nchans']
-        
-        # Calculate start/end frequencies
-        if foff < 0:
-            f_start = fch1 + foff * nchans
-            f_end = fch1
-        else:
-            f_start = fch1
-            f_end = fch1 + foff * nchans
-        
-        return {
-            'f_start': f_start,
-            'f_end': f_end,
-            'nchans': nchans,
-            'foff': foff,
-            'bandwidth_mhz': abs(f_end - f_start),
-            'source_name': header.get('source_name', 'Unknown')
-        }
-    
-    def calculate_chunks(self, f_start: float, f_end: float) -> List[Tuple[float, float]]:
-        """Divide frequency range into n_chunks."""
-        bandwidth = f_end - f_start
-        chunk_size = bandwidth / self.n_chunks
-        
-        chunks = []
-        for i in range(self.n_chunks):
-            chunk_start = f_start + i * chunk_size
-            chunk_end = f_start + (i + 1) * chunk_size
-            chunks.append((chunk_start, chunk_end))
-        
-        return chunks
-    
-    def load_chunk(self, file_paths: List[str], f_start: float, f_stop: float) -> np.ndarray:
-        """
-        Load a frequency chunk from all 6 observations.
-        
-        Returns: Array of shape (6, time, freq_chunk)
-        """
+    def _load_chunk(self, 
+                    cadence_files: List[Union[str, Path]], 
+                    f_start: float, 
+                    f_end: float) -> np.ndarray:
+        """Load a frequency chunk from all 6 observations."""
         cadence_data = []
         
-        for i, fp in enumerate(file_paths):
+        for filepath in cadence_files:
             with warnings.catch_warnings():
                 warnings.simplefilter("ignore")
-                wf = Waterfall(fp, f_start=f_start, f_stop=f_stop)
+                wf = Waterfall(str(filepath), f_start=f_start, f_stop=f_end)
             
             data = wf.data.squeeze()
             if data.ndim == 1:
@@ -187,168 +252,121 @@ class SRTPipelineOptimized:
         return np.stack(cadence_data, axis=0)  # (6, time, freq)
     
     def extract_and_process_snippets(self, chunk_data: np.ndarray, 
-                                      chunk_freq_start: float,
+                                      chunk_freq_min: float,
+                                      chunk_freq_max: float,
                                       foff: float) -> List[Tuple[int, float, np.ndarray]]:
         """
-        Extract 4096-channel snippets, downsample and normalize.
+        Extract 4096-channel snippets with NON-OVERLAPPING windows.
         
-        Returns: List of (global_channel, freq_mhz, processed_snippet)
+        Args:
+            chunk_data: Data array (6, 16, n_freq)
+            chunk_freq_min: Minimum frequency of chunk (MHz)
+            chunk_freq_max: Maximum frequency of chunk (MHz)
+            foff: Frequency offset (can be positive or negative)
+            
+        Returns: List of (local_channel, freq_mhz, processed_snippet)
         """
         n_freq = chunk_data.shape[2]
-        n_snippets = n_freq // self.SNIPPET_WIDTH
         
         snippets = []
         
-        for i in range(n_snippets):
-            start = i * self.SNIPPET_WIDTH
-            end = (i + 1) * self.SNIPPET_WIDTH
+        # Determine step size based on overlap setting
+        if self.overlap:
+            step = self.SNIPPET_WIDTH // 2  # 2048 = 50% overlap
+        else:
+            step = self.SNIPPET_WIDTH  # 4096 = no overlap
+        
+        start = 0
+        while start + self.SNIPPET_WIDTH <= n_freq:
+            end = start + self.SNIPPET_WIDTH
             
             # Extract
             snippet = chunk_data[:, :, start:end]  # (6, 16, 4096)
             
-            # Downsample
-            snippet_ds = snippet.reshape(6, snippet.shape[1], self.FINAL_FREQ_BINS, 
-                                         self.DOWNSAMPLE_FACTOR).mean(axis=3)
+            # Use the SAME preprocessing as training:
+            # 1. Downscale using shared function
+            snippet_ds = downscale(snippet, factor=self.DOWNSAMPLE_FACTOR)  # (6, 16, 512)
             
-            # Normalize each observation
-            processed = np.zeros_like(snippet_ds)
-            for j in range(6):
-                obs = snippet_ds[j].astype(np.float64)
-                obs = np.log(np.abs(obs) + 1e-10)
-                obs = obs - obs.min()
-                max_val = obs.max()
-                if max_val > 0:
-                    obs = obs / max_val
-                processed[j] = obs
+            # 2. Preprocess using shared function (log normalize + add channel dim)
+            processed = preprocess(snippet_ds, add_channel=True)  # (6, 16, 512, 1)
             
-            # Add channel dimension
-            processed = processed[..., np.newaxis]  # (6, 16, 512, 1)
-            
-            # Calculate frequency
+            # Calculate frequency (center of snippet)
+            # When foff < 0: channel 0 is at MAX frequency, so we subtract
+            # When foff > 0: channel 0 is at MIN frequency, so we add
             center_channel = start + self.SNIPPET_WIDTH // 2
-            freq_mhz = chunk_freq_start + center_channel * abs(foff)
+            
+            if foff < 0:
+                # Frequencies decrease with channel
+                freq_mhz = chunk_freq_max - center_channel * abs(foff)
+            else:
+                # Frequencies increase with channel
+                freq_mhz = chunk_freq_min + center_channel * abs(foff)
             
             snippets.append((center_channel, freq_mhz, processed))
+            
+            start += step
         
         return snippets
     
     def batch_encode(self, snippets: List[np.ndarray]) -> np.ndarray:
         """Encode a batch of snippets through VAE."""
         # Stack all observations from all snippets
-        # Each snippet is (6, 16, 512, 1), we need (N*6, 16, 512, 1)
-        all_obs = np.concatenate(snippets, axis=0)  # (N*6, 16, 512, 1)
+        all_obs = []
+        for snippet in snippets:
+            for obs_idx in range(6):
+                all_obs.append(snippet[obs_idx])
+        
+        all_obs = np.array(all_obs)  # (n_snippets * 6, 16, 512, 1)
         
         # Encode in batches
-        outputs = self.encoder.predict(all_obs, batch_size=self.batch_size, verbose=0)
+        all_latents = []
+        for i in range(0, len(all_obs), self.batch_size):
+            batch = all_obs[i:i + self.batch_size]
+            outputs = self.encoder.predict(batch, verbose=0)
+            
+            # Handle different output formats
+            if isinstance(outputs, list):
+                z = outputs[2]  # Sampling layer output
+            else:
+                z = outputs
+            
+            all_latents.append(z)
         
-        if isinstance(outputs, list):
-            z = outputs[2]
-        else:
-            z = outputs
+        all_latents = np.concatenate(all_latents, axis=0)
         
-        return z  # (N*6, 8)
+        # Reshape to (n_snippets, 6 * latent_dim)
+        n_snippets = len(snippets)
+        latent_dim = all_latents.shape[1]
+        cadence_features = all_latents.reshape(n_snippets, 6 * latent_dim)
+        
+        return cadence_features
+
+
+def run_inference(cadence_files: List[str],
+                  encoder_path: str,
+                  rf_path: str,
+                  source_name: str = "Unknown",
+                  threshold: float = 0.5,
+                  n_chunks: int = 8) -> CadenceResult:
+    """
+    Run inference on a cadence.
     
-    def process_cadence(self, file_paths: List[Union[str, Path]]) -> CadenceResult:
-        """
-        Process cadence with chunked frequency loading.
+    Args:
+        cadence_files: List of 6 HDF5 file paths
+        encoder_path: Path to encoder model
+        rf_path: Path to random forest
+        source_name: Source name
+        threshold: Classification threshold
+        n_chunks: Number of frequency chunks
         
-        Args:
-            file_paths: List of 6 .h5 file paths [ON, OFF, ON, OFF, ON, OFF]
-        
-        Returns:
-            CadenceResult with all candidates
-        """
-        file_paths = [str(p) for p in file_paths]
-        
-        self._log(f"\n{'='*60}")
-        self._log("SRT OPTIMIZED PIPELINE - CHUNKED PROCESSING")
-        self._log(f"{'='*60}")
-        
-        # Get frequency info
-        info = self.get_frequency_info(file_paths[0])
-        f_start, f_end = info['f_start'], info['f_end']
-        
-        self._log(f"\nObservation info:")
-        self._log(f"  Source: {info['source_name']}")
-        self._log(f"  Channels: {info['nchans']:,}")
-        self._log(f"  Bandwidth: {info['bandwidth_mhz']:.2f} MHz")
-        self._log(f"  Frequency: {f_start:.2f} - {f_end:.2f} MHz")
-        
-        # Calculate chunks
-        chunks = self.calculate_chunks(f_start, f_end)
-        self._log(f"\nProcessing in {self.n_chunks} chunks (~{info['bandwidth_mhz']/self.n_chunks:.1f} MHz each)")
-        
-        all_results = []
-        total_snippets = 0
-        
-        for chunk_idx, (chunk_start, chunk_end) in enumerate(chunks):
-            self._log(f"\n--- Chunk {chunk_idx+1}/{self.n_chunks}: {chunk_start:.2f} - {chunk_end:.2f} MHz ---")
-            
-            # Load chunk
-            self._log(f"  Loading...")
-            chunk_data = self.load_chunk(file_paths, chunk_start, chunk_end)
-            self._log(f"  Loaded shape: {chunk_data.shape}")
-            
-            # Extract snippets
-            snippets_data = self.extract_and_process_snippets(
-                chunk_data, chunk_start, info['foff']
-            )
-            n_snippets = len(snippets_data)
-            total_snippets += n_snippets
-            self._log(f"  Snippets: {n_snippets}")
-            
-            if n_snippets == 0:
-                del chunk_data
-                gc.collect()
-                continue
-            
-            # Batch encode
-            self._log(f"  Encoding...")
-            snippet_arrays = [s[2] for s in snippets_data]
-            z_all = self.batch_encode(snippet_arrays)
-            
-            # Classify each snippet
-            self._log(f"  Classifying...")
-            for i, (center_ch, freq_mhz, _) in enumerate(snippets_data):
-                # Get 48D features for this snippet
-                z_snippet = z_all[i*6:(i+1)*6, :].flatten()
-                
-                # Classify
-                proba = self.classifier.predict_proba(z_snippet.reshape(1, -1))[0]
-                eti_prob = proba[1] if len(proba) > 1 else proba[0]
-                is_eti = eti_prob > self.threshold
-                
-                all_results.append(SnippetResult(
-                    eti_probability=eti_prob,
-                    is_eti=is_eti,
-                    center_channel=center_ch,
-                    freq_mhz=freq_mhz,
-                    latent_features=z_snippet
-                ))
-            
-            # Cleanup
-            del chunk_data, snippets_data, z_all
-            gc.collect()
-            
-            # Progress
-            n_eti = sum(1 for r in all_results if r.is_eti)
-            self._log(f"  ETI candidates so far: {n_eti}")
-        
-        result = CadenceResult(
-            source_name=info['source_name'],
-            snippets=all_results
-        )
-        
-        # Summary
-        self._log(f"\n{'='*60}")
-        self._log("RESULTS SUMMARY")
-        self._log(f"{'='*60}")
-        self._log(f"  Total snippets: {len(result.snippets)}")
-        self._log(f"  ETI detections: {result.n_detections}")
-        
-        if result.n_detections > 0:
-            self._log("\n  Top candidates:")
-            for i, s in enumerate(result.top_candidates[:5]):
-                self._log(f"    {i+1}. {s.freq_mhz:.6f} MHz - P(ETI)={s.eti_probability:.3f}")
-        
-        return result
+    Returns:
+        CadenceResult with classifications
+    """
+    pipeline = OptimizedSRTPipeline(
+        encoder_path=encoder_path,
+        rf_path=rf_path,
+        threshold=threshold,
+        n_chunks=n_chunks
+    )
+    
+    return pipeline.process_cadence(cadence_files, source_name)

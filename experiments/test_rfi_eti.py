@@ -28,8 +28,8 @@ print("=" * 70)
 # ============================================
 # CONFIGURATION
 # ============================================
-ENCODER_PATH = Path(__file__).parent.parent / "results" / "real_obs_training" / "encoder_final.keras"
-RF_PATH = Path(__file__).parent.parent / "results" / "real_obs_training" / "random_forest.joblib"
+ENCODER_PATH = Path(__file__).parent.parent / "results" / "real_obs_training" / "K_band" / "encoder_final.keras"
+RF_PATH = Path(__file__).parent.parent / "results" / "real_obs_training" / "K_band" / "random_forest.joblib"
 OUTPUT_DIR = Path(__file__).parent.parent / "results" / "rfi_eti_test"
 OUTPUT_DIR.mkdir(parents=True, exist_ok=True)
 THRESHOLD = 0.5
@@ -195,7 +195,7 @@ for r in results:
     status = "✅" if r["correct"] else "❌"
     if r["correct"]:
         correct_count += 1
-    print(f"│ {r['name']:23} │ {r['probability']:11.4f} │ {pred:10} │ {exp:8} │ {status:6} │")
+    print(f"│ {r['name']:23} │ {r['probability']:11.4f} │ {pred:10} │ {exp:8} │ {status:5} │")
 
 print("└─────────────────────────┴─────────────┴────────────┴──────────┴────────┘")
 
@@ -208,22 +208,37 @@ print("\n" + "=" * 70)
 print("SAVING VISUALIZATION")
 print("=" * 70)
 
-fig, axes = plt.subplots(2, 3, figsize=(15, 8))
-
 # Plot ETI + Heavy RFI case
 heavy_rfi_case = test_cases[4][1]  # ETI + Heavy RFI
 
-for i in range(6):
-    ax = axes[i // 3, i % 3]
-    obs_type = "ON" if i in [0, 2, 4] else "OFF"
-    ax.imshow(heavy_rfi_case[i], aspect='auto', cmap='viridis')
-    ax.set_title(f"Observation {i+1} ({obs_type})")
-    ax.set_xlabel("Frequency bins")
-    ax.set_ylabel("Time bins")
+heavy_rfi_prob = results[4]["probability"]
 
-plt.suptitle("ETI + Heavy RFI Sample (Challenging)", fontsize=14)
+# Stack all 6 observations vertically
+stacked = np.vstack([heavy_rfi_case[i] for i in range(6)])
+
+fig, ax = plt.subplots(figsize=(14, 8))
+im = ax.imshow(stacked, aspect='auto', cmap='viridis', interpolation='nearest')
+
+# Add horizontal lines to separate observations
+obs_labels = ["ON₁", "OFF₁", "ON₂", "OFF₂", "ON₃", "OFF₃"]
+tchans = heavy_rfi_case.shape[1]
+for i in range(1, 6):
+    ax.axhline(y=i * tchans - 0.5, color='white', linewidth=1.5, linestyle='--', alpha=0.7)
+
+# Add observation labels on the left
+for i, label in enumerate(obs_labels):
+    ax.text(-50, i * tchans + tchans/2, label, fontsize=12, fontweight='bold',
+            ha='right', va='center', color='white' if i % 2 == 0 else 'lightblue')
+
+ax.set_xlabel("Frequency Bins", fontsize=12)
+ax.set_ylabel("Time Bins (6 observations stacked)", fontsize=12)
+ax.set_title(f"ETI + Heavy RFI Sample (Challenging) - P(ETI) = {heavy_rfi_prob:.4f}", fontsize=14)
+
+# Colorbar
+cbar = plt.colorbar(im, ax=ax, shrink=0.8)
+cbar.set_label("Intensity", fontsize=11)
 plt.tight_layout()
-plt.savefig(OUTPUT_DIR / "eti_heavy_rfi_sample.png", dpi=150)
+plt.savefig(OUTPUT_DIR / "eti_heavy_rfi_sample.png", dpi=150, bbox_inches='tight')
 print(f"  Saved visualization to {OUTPUT_DIR / 'eti_heavy_rfi_sample.png'}")
 
 print("\n" + "=" * 70)

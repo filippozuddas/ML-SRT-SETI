@@ -188,6 +188,186 @@ def cmd_batch(args):
     print(f"  Total ETI candidates: {total_detections}")
 
 
+def cmd_listfile(args):
+    """Process cadences from a list file.
+    
+    List file format (one per line):
+        TARGET_NAME|path1.h5,path2.h5,path3.h5,path4.h5,path5.h5,path6.h5
+    """
+    from .pipeline import SRTPipeline
+    
+    list_path = Path(args.list_file)
+    if not list_path.exists():
+        print(f"Error: List file not found: {list_path}", file=sys.stderr)
+        sys.exit(1)
+    
+    # Parse list file
+    cadences = []
+    with open(list_path, 'r') as f:
+        for line_num, line in enumerate(f, 1):
+            line = line.strip()
+            if not line or line.startswith('#'):
+                continue
+            
+            parts = line.split('|')
+            if len(parts) != 2:
+                print(f"Warning: Line {line_num}: Expected TARGET|paths format, skipping")
+                continue
+            
+            target_name = parts[0].strip()
+            file_paths = [p.strip() for p in parts[1].split(',')]
+            
+            if len(file_paths) != 6:
+                print(f"Warning: Line {line_num} ({target_name}): Expected 6 files, got {len(file_paths)}, skipping")
+                continue
+            
+            # Check files exist
+            missing = [p for p in file_paths if not Path(p).exists()]
+            if missing:
+                print(f"Warning: Line {line_num} ({target_name}): {len(missing)} files missing, skipping")
+                continue
+            
+            cadences.append((target_name, file_paths))
+    
+    print(f"Found {len(cadences)} valid cadences in {list_path}")
+    
+    if not cadences:
+        print("No valid cadences found. Exiting.")
+        sys.exit(0)
+    
+    # Create pipeline
+    overlap_enabled = hasattr(args, 'overlap') and args.overlap
+    if hasattr(args, 'optimized') and args.optimized:
+        from .pipeline_optimized import SRTPipelineOptimized
+        overlap_str = "+overlap" if overlap_enabled else ""
+        print(f"Using OPTIMIZED pipeline (chunks={args.chunks}, batch_size={args.batch_size}{overlap_str})")
+        pipeline = SRTPipelineOptimized(
+            encoder_path=args.encoder,
+            classifier_path=args.classifier,
+            threshold=args.threshold,
+            n_chunks=args.chunks,
+            batch_size=args.batch_size,
+            overlap=overlap_enabled,
+            verbose=False
+        )
+    else:
+        pipeline = SRTPipeline(
+            encoder_path=args.encoder,
+            classifier_path=args.classifier,
+            threshold=args.threshold,
+            overlap=overlap_enabled,
+            verbose=False
+        )
+    
+    # Process each cadence
+    all_results = []
+    
+    # Create output directory and summary file if output specified
+    if args.output:
+        output_dir = Path(args.output)
+        output_dir.mkdir(parents=True, exist_ok=True)
+        
+        # Initialize summary CSV with header
+        summary_path = output_dir / "inference_summary.csv"
+        with open(summary_path, 'w', newline='') as f:
+            writer = csv.writer(f)
+            writer.writerow(['target', 'n_snippets', 'n_detections', 'top_freq_mhz', 'top_probability', 'status'])
+    
+    for i, (target_name, file_paths) in enumerate(cadences, 1):
+        print(f"[{i}/{len(cadences)}] {target_name}...", end=' ', flush=True)
+        
+        try:
+            result = pipeline.process_cadence(file_paths)
+            all_results.append((target_name, result))
+            
+            if result.n_detections > 0:
+                top = result.top_candidates[0]
+                print(f"🔴 {result.n_detections} detections (top: {top.eti_probability:.3f} @ {top.freq_mhz:.2f} MHz)")
+            else:
+                print(f"✓ No detections")
+            
+            # Save results IMMEDIATELY for this target
+            if args.output:
+                # Append to summary CSV
+                with open(summary_path, 'a', newline='') as f:
+                    writer = csv.writer(f)
+                    top = result.top_candidates[0] if result.n_detections > 0 else None
+                    writer.writerow([
+                        target_name,
+                        len(result.snippets),
+                        result.n_detections,
+                        top.freq_mhz if top else '',
+                        top.eti_probability if top else '',
+                        'success'
+                    ])
+                
+                # Save per-target detailed results
+                target_dir = output_dir / target_name
+                target_dir.mkdir(parents=True, exist_ok=True)
+                
+                # Save metadata with file paths (for easy plotting later)
+                metadata_path = target_dir / "metadata.json"
+                with open(metadata_path, 'w') as f:
+                    json.dump({
+                        'target': target_name,
+                        'files': file_paths,
+                        'threshold': args.threshold,
+                        'n_snippets': len(result.snippets),
+                        'n_detections': result.n_detections
+                    }, f, indent=2)
+                
+                # All snippets
+                all_snippets_path = target_dir / "all_snippets.csv"
+                with open(all_snippets_path, 'w', newline='') as f:
+                    writer = csv.writer(f)
+                    writer.writerow(['freq_mhz', 'probability', 'is_eti', 'center_channel'])
+                    for s in result.snippets:
+                        writer.writerow([s.freq_mhz, s.eti_probability, s.is_eti, s.center_channel])
+                
+                # Candidates only (those above threshold)
+                if result.n_detections > 0:
+                    candidates_path = target_dir / "candidates.csv"
+                    with open(candidates_path, 'w', newline='') as f:
+                        writer = csv.writer(f)
+                        writer.writerow(['freq_mhz', 'probability', 'center_channel'])
+                        # Save ALL candidates above threshold (sorted by probability)
+                        eti_candidates = sorted(
+                            [s for s in result.snippets if s.is_eti],
+                            key=lambda x: x.eti_probability,
+                            reverse=True
+                        )
+                        for s in eti_candidates:
+                            writer.writerow([s.freq_mhz, s.eti_probability, s.center_channel])
+                
+        except Exception as e:
+            print(f"❌ Error: {e}")
+            all_results.append((target_name, None))
+            
+            # Log error to summary
+            if args.output:
+                with open(summary_path, 'a', newline='') as f:
+                    writer = csv.writer(f)
+                    writer.writerow([target_name, 0, 0, '', '', f'error: {str(e)[:50]}'])
+    
+    # Final summary
+    if args.output:
+        print(f"\nResults saved to {output_dir}/")
+        print(f"  📄 Summary: inference_summary.csv")
+        print(f"  📁 Per-target folders: {len([r for _, r in all_results if r is not None])} targets")
+    
+    # Summary
+    successful = [r for _, r in all_results if r is not None]
+    total_detections = sum(r.n_detections for r in successful)
+    with_detections = sum(1 for r in successful if r.n_detections > 0)
+    
+    print(f"\n{'='*50}")
+    print(f"INFERENCE COMPLETE")
+    print(f"  Cadences processed: {len(all_results)}")
+    print(f"  Successful: {len(successful)}")
+    print(f"  With detections: {with_detections}")
+    print(f"  Total ETI candidates: {total_detections}")
+
+
 def main():
     parser = argparse.ArgumentParser(
         prog='srt-pipeline',
@@ -242,6 +422,29 @@ def main():
     batch_parser.add_argument('--output', '-o', type=str, default=None,
                               help='Output CSV file')
     batch_parser.set_defaults(func=cmd_batch)
+    
+    # Listfile command - process from TARGET|path1,...,path6 format
+    listfile_parser = subparsers.add_parser('listfile', help='Process cadences from a list file')
+    listfile_parser.add_argument('--list-file', '-l', required=True,
+                                  help='Path to list file (TARGET|path1,path2,...,path6 format)')
+    listfile_parser.add_argument('--encoder', '-e', required=True,
+                                  help='Path to encoder model')
+    listfile_parser.add_argument('--classifier', '-c', required=True,
+                                  help='Path to classifier')
+    listfile_parser.add_argument('--threshold', '-t', type=float, default=0.5,
+                                  help='ETI detection threshold')
+    listfile_parser.add_argument('--output', '-o', type=str, default=None,
+                                  help='Output directory for results')
+    # Optimized pipeline options
+    listfile_parser.add_argument('--optimized', '-O', action='store_true',
+                                  help='Use optimized chunked pipeline for large files')
+    listfile_parser.add_argument('--chunks', type=int, default=8,
+                                  help='Number of frequency chunks (default: 8, used with --optimized)')
+    listfile_parser.add_argument('--batch-size', type=int, default=256,
+                                  help='Batch size for GPU encoding (default: 256, used with --optimized)')
+    listfile_parser.add_argument('--overlap', action='store_true',
+                                  help='Use 50%% overlapping windows for better signal coverage (2x more snippets)')
+    listfile_parser.set_defaults(func=cmd_listfile)
     
     args = parser.parse_args()
     

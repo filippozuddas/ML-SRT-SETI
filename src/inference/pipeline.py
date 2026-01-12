@@ -13,6 +13,7 @@ import joblib
 from pathlib import Path
 from dataclasses import dataclass, field
 from typing import List, Tuple, Optional, Union
+from blimpy import Waterfall
 import warnings
 
 from ..data.loader import SRTDataLoader, Observation, Cadence
@@ -85,6 +86,7 @@ class SRTPipeline:
                  encoder_path: Union[str, Path],
                  classifier_path: Union[str, Path],
                  threshold: float = 0.9,
+                 overlap: bool = False,
                  verbose: bool = True):
         """
         Initialize pipeline.
@@ -93,9 +95,11 @@ class SRTPipeline:
             encoder_path: Path to encoder model (.keras or .h5)
             classifier_path: Path to Random Forest classifier (.joblib)
             threshold: ETI detection threshold (default: 0.5)
+            overlap: Use 50% overlapping windows for better signal coverage
             verbose: Print progress messages
         """
         self.threshold = threshold
+        self.overlap = overlap
         self.verbose = verbose
         self.loader = SRTDataLoader()
         
@@ -131,12 +135,15 @@ class SRTPipeline:
                          cadence: Cadence,
                          center_channels: Optional[List[int]] = None) -> List[np.ndarray]:
         """
-        Extract 4096-channel snippets from cadence.
+        Extract 4096-channel snippets from cadence with OVERLAPPING (step=2048).
+        
+        As per paper: uses overlapping search offset by 2048 frequency bins
+        for better signal coverage (~99.999% for DR < 6 Hz/s).
         
         Args:
             cadence: Loaded cadence data
             center_channels: List of channel indices to extract around.
-                           If None, extracts all non-overlapping snippets.
+                           If None, extracts OVERLAPPING snippets (step=2048).
                            
         Returns:
             List of preprocessed snippet arrays, each of shape (6, 16, 512, 1)
@@ -146,12 +153,17 @@ class SRTPipeline:
         n_freq = data.shape[2]
         
         if center_channels is None:
-            # Extract all non-overlapping snippets
-            n_snippets = n_freq // self.SNIPPET_WIDTH
-            center_channels = [
-                i * self.SNIPPET_WIDTH + self.SNIPPET_WIDTH // 2 
-                for i in range(n_snippets)
-            ]
+            # Determine step size based on overlap setting
+            if self.overlap:
+                step = self.SNIPPET_WIDTH // 2  # 2048 = 50% overlap
+            else:
+                step = self.SNIPPET_WIDTH  # 4096 = no overlap
+            
+            center_channels = []
+            start = self.SNIPPET_WIDTH // 2  # Start at first valid center
+            while start + self.SNIPPET_WIDTH // 2 <= n_freq:
+                center_channels.append(start)
+                start += step
         
         snippets = []
         
@@ -167,14 +179,12 @@ class SRTPipeline:
             # Extract snippet for all 6 observations
             snippet = data[:, :, start:end]  # (6, 16, 4096)
             
-            # Downsample frequency by 8x
-            snippet_ds = self._downsample(snippet)  # (6, 16, 512)
+            # Use the SAME preprocessing as training:
+            # 1. Downscale using shared function
+            snippet_ds = downscale(snippet, factor=self.DOWNSAMPLE_FACTOR)  # (6, 16, 512)
             
-            # Apply log normalization per observation
-            snippet_norm = self._normalize(snippet_ds)  # (6, 16, 512)
-            
-            # Add channel dimension
-            snippet_final = snippet_norm[..., np.newaxis]  # (6, 16, 512, 1)
+            # 2. Preprocess using shared function (log normalize + add channel dim)
+            snippet_final = preprocess(snippet_ds, add_channel=True)  # (6, 16, 512, 1)
             
             snippets.append((center, snippet_final))
         
@@ -265,6 +275,14 @@ class SRTPipeline:
         snippets_data = self.extract_snippets(cadence, center_channels)
         self._log(f"  Found {len(snippets_data)} snippets")
         
+        # Get frequency info from header ONCE (before loop)
+        obs = cadence.observations[0]
+        with warnings.catch_warnings():
+            warnings.simplefilter("ignore")
+            wf = Waterfall(obs.file_path, load_data=False)
+        fch1 = wf.header['fch1']
+        foff = wf.header['foff']
+        
         # Process each snippet
         self._log("\nProcessing snippets...")
         results = []
@@ -276,10 +294,8 @@ class SRTPipeline:
             # Classify
             eti_prob, is_eti = self.classify_snippet(latent_features)
             
-            # Calculate frequency
-            obs = cadence.observations[0]
-            freq_per_ch = (obs.freq_end - obs.freq_start) / obs.n_freq
-            freq_mhz = obs.freq_start + center_ch * freq_per_ch
+            # Calculate frequency: fch1 is at channel 0, freq at channel N = fch1 + N * foff
+            freq_mhz = fch1 + center_ch * foff
             
             results.append(SnippetResult(
                 eti_probability=eti_prob,
@@ -339,8 +355,12 @@ class SRTPipeline:
         eti_prob, is_eti = self.classify_snippet(latent_features)
         
         obs = cadence.observations[0]
-        freq_per_ch = (obs.freq_end - obs.freq_start) / obs.n_freq
-        freq_mhz = obs.freq_start + center_channel * freq_per_ch
+        with warnings.catch_warnings():
+            warnings.simplefilter("ignore")
+            wf = Waterfall(obs.file_path, load_data=False)
+        fch1 = wf.header['fch1']
+        foff = wf.header['foff']
+        freq_mhz = fch1 + center_channel * foff
         
         return SnippetResult(
             eti_probability=eti_prob,

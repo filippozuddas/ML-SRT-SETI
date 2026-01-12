@@ -1,0 +1,14 @@
+{
+  "target": "TIC310981412",
+  "files": [
+    "/content/hdd_esterno/gbezze/TIC_H5/guppi_60706_07469_218003_TIC310981412_ON_0001.0000.h5",
+    "/content/hdd_esterno/gbezze/TIC_H5/guppi_60706_07783_219757_TIC310981412_OFF_0001.0000.h5",
+    "/content/hdd_esterno/gbezze/TIC_H5/guppi_60706_08097_221515_TIC310981412_ON_0001.0000.h5",
+    "/content/hdd_esterno/gbezze/TIC_H5/guppi_60706_08412_223274_TIC310981412_OFF_0001.0000.h5",
+    "/content/hdd_esterno/gbezze/TIC_H5/guppi_60706_08725_225022_TIC310981412_ON_0001.0000.h5",
+    "/content/hdd_esterno/gbezze/TIC_H5/guppi_60706_09038_226775_TIC310981412_OFF_0001.0000.h5"
+  ],
+  "threshold": 0.7,
+  "n_snippets": 32764,
+  "n_detections": 10
+}

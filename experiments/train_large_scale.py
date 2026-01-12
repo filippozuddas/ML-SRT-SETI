@@ -73,7 +73,7 @@ def parse_args():
                         help='Early stopping patience (default: 15)')
     
     # Output
-    parser.add_argument('--output', '-o', type=str, default='/content/filippo/ML-SRT-SETI/results/real_obs_training',
+    parser.add_argument('--output', '-o', type=str, default='result/real_obs_training',
                         help='Output directory for checkpoints')
     
     # Resume training
@@ -135,9 +135,15 @@ DENSE_UNITS = 512
 ALPHA = args.alpha
 BETA = args.beta
 
-# Early Stopping
+# Early Stopping - Monitor discriminative loss for better latent space separation
 EARLY_STOPPING_PATIENCE = args.patience
-EARLY_STOPPING_MIN_DELTA = 3
+EARLY_STOPPING_MIN_DELTA = 0.1  # Reduced from 10.0 to catch small improvements
+EARLY_STOPPING_MONITOR = 'val_false_loss'  # Focus on discriminative performance
+
+# ReduceLROnPlateau - Helps convergence
+REDUCE_LR_FACTOR = 0.5
+REDUCE_LR_PATIENCE = 10
+REDUCE_LR_MIN = 1e-6
 
 # Plate configuration
 USE_SRT_PLATE = args.plate is not None and not args.no_plate
@@ -436,10 +442,20 @@ for batch_idx in range(START_BATCH, NUM_BATCHES):
     print(f"\nTraining for up to {epochs_this_batch} epochs (early stopping enabled)...")
     
     early_stopping = tf.keras.callbacks.EarlyStopping(
-        monitor='val_loss',
+        monitor=EARLY_STOPPING_MONITOR,  # val_false_loss for discriminative focus
         patience=EARLY_STOPPING_PATIENCE,
         min_delta=EARLY_STOPPING_MIN_DELTA,
         restore_best_weights=True,
+        mode='min',
+        verbose=1
+    )
+    
+    reduce_lr = tf.keras.callbacks.ReduceLROnPlateau(
+        monitor=EARLY_STOPPING_MONITOR,
+        factor=REDUCE_LR_FACTOR,
+        patience=REDUCE_LR_PATIENCE,
+        min_lr=REDUCE_LR_MIN,
+        mode='min',
         verbose=1
     )
     
@@ -450,7 +466,7 @@ for batch_idx in range(START_BATCH, NUM_BATCHES):
         batch_size=effective_batch_size,
         validation_data=(x_val, y_val),
         validation_batch_size=VALIDATION_BATCH_SIZE,
-        callbacks=[early_stopping],
+        callbacks=[early_stopping, reduce_lr],
         verbose=1
     )
     
@@ -459,8 +475,8 @@ for batch_idx in range(START_BATCH, NUM_BATCHES):
     if actual_epochs < epochs_this_batch:
         print(f"  Early stopped at epoch {actual_epochs}/{epochs_this_batch}")
     
-    # Get best validation loss from this batch
-    batch_best_val_loss = min(history.history['val_loss'])
+    # Get best discriminative loss from this batch (matches EARLY_STOPPING_MONITOR)
+    batch_best_val_loss = min(history.history[EARLY_STOPPING_MONITOR])
     
     # Check for catastrophic degradation (>5% increase from global best)
     CATASTROPHIC_THRESHOLD = 1.05  # 5% tolerance
@@ -480,13 +496,13 @@ for batch_idx in range(START_BATCH, NUM_BATCHES):
             else:
                 print(f"      ❌ No global best checkpoint found - continuing with degraded weights")
         else:
-            print(f"  ✓ Batch acceptable (val_loss={batch_best_val_loss:.2f})")
+            print(f"  ✓ Batch acceptable ({EARLY_STOPPING_MONITOR}={batch_best_val_loss:.2f})")
     
     # Update global best if this batch is better
     if batch_best_val_loss < GLOBAL_BEST_VAL_LOSS:
         GLOBAL_BEST_VAL_LOSS = batch_best_val_loss
         GLOBAL_BEST_BATCH = batch_idx
-        print(f"  🏆 NEW GLOBAL BEST! val_loss={batch_best_val_loss:.2f}")
+        print(f"  🏆 NEW GLOBAL BEST! {EARLY_STOPPING_MONITOR}={batch_best_val_loss:.2f}")
         
         # Save global best checkpoint
         model.encoder.save(str(OUTPUT_DIR / 'encoder_global_best.keras'))
@@ -497,6 +513,10 @@ for batch_idx in range(START_BATCH, NUM_BATCHES):
     # Save per-batch checkpoint
     model.encoder.save(str(OUTPUT_DIR / f'encoder_batch_{batch_idx + 1}.keras'))
     model.decoder.save(str(OUTPUT_DIR / f'decoder_batch_{batch_idx + 1}.keras'))
+    
+    # Save "latest" checkpoint for continuous learning between batches
+    model.encoder.save(str(OUTPUT_DIR / 'encoder_latest.keras'))
+    model.decoder.save(str(OUTPUT_DIR / 'decoder_latest.keras'))
     
     # Plot batch history
     plot_batch_history(history, batch_idx, OUTPUT_DIR)
@@ -510,12 +530,12 @@ for batch_idx in range(START_BATCH, NUM_BATCHES):
     del vae_val, true_val, false_val
     del x_train, y_train, x_val, y_val
     del history
-    #gc.collect()
+    gc.collect()
     
     # Clear TensorFlow internal caches
-    """tf.keras.backend.clear_session()
+    tf.keras.backend.clear_session()
     
-    # Rebuild model after clear_session (keeps weights via global best checkpoint)
+    # Rebuild model after clear_session (load global best for stability)
     if (OUTPUT_DIR / 'encoder_global_best.keras').exists():
         with strategy.scope():
             model = build_vae(
@@ -526,9 +546,10 @@ for batch_idx in range(START_BATCH, NUM_BATCHES):
                 beta=BETA,
                 learning_rate=LEARNING_RATE
             )
+            # Load global best weights for stable training
             model.encoder.load_weights(str(OUTPUT_DIR / 'encoder_global_best.keras'))
             model.decoder.load_weights(str(OUTPUT_DIR / 'decoder_global_best.keras'))
-    """
+    
     gc.collect()
 
 # Save final model (use global best if available)
