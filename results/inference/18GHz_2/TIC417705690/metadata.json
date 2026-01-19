@@ -1,0 +1,14 @@
+{
+  "target": "TIC417705690",
+  "files": [
+    "/content/hdd_esterno/lmanunza/output_turbo_seti/20210616/blc01_guppi_59381_47684_012526_TIC417705690_ON_0001.0000.h5",
+    "/content/hdd_esterno/lmanunza/output_turbo_seti/20210616/blc01_guppi_59381_48000_014290_TIC417705690_OFF_0001.0000.h5",
+    "/content/hdd_esterno/lmanunza/output_turbo_seti/20210616/blc01_guppi_59381_48314_016044_TIC417705690_ON_0001.0000.h5",
+    "/content/hdd_esterno/lmanunza/output_turbo_seti/20210616/blc01_guppi_59381_48626_017791_TIC417705690_OFF_0001.0000.h5",
+    "/content/hdd_esterno/lmanunza/output_turbo_seti/20210616/blc01_guppi_59381_48938_019534_TIC417705690_ON_0001.0000.h5",
+    "/content/hdd_esterno/lmanunza/output_turbo_seti/20210616/blc01_guppi_59381_49251_021282_TIC417705690_OFF_0001.0000.h5"
+  ],
+  "threshold": 0.7,
+  "n_snippets": 32764,
+  "n_detections": 18
+}

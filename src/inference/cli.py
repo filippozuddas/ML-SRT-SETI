@@ -267,11 +267,15 @@ def cmd_listfile(args):
         output_dir = Path(args.output)
         output_dir.mkdir(parents=True, exist_ok=True)
         
-        # Initialize summary CSV with header
+        # Initialize summary CSV - append if exists, create with header if new
         summary_path = output_dir / "inference_summary.csv"
-        with open(summary_path, 'w', newline='') as f:
-            writer = csv.writer(f)
-            writer.writerow(['target', 'n_snippets', 'n_detections', 'top_freq_mhz', 'top_probability', 'status'])
+        if not summary_path.exists():
+            with open(summary_path, 'w', newline='') as f:
+                writer = csv.writer(f)
+                writer.writerow(['target', 'n_snippets', 'n_detections', 'top_freq_mhz', 'top_probability', 'status'])
+            print(f"  📄 Created new summary: {summary_path}")
+        else:
+            print(f"  📄 Appending to existing summary: {summary_path}")
     
     for i, (target_name, file_paths) in enumerate(cadences, 1):
         print(f"[{i}/{len(cadences)}] {target_name}...", end=' ', flush=True)

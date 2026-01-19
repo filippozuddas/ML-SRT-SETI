@@ -18,6 +18,10 @@ def normalize_log(data: np.ndarray) -> np.ndarray:
     
     Transforms data as: log(data) -> shift to 0 -> scale to [0, 1]
     
+    NOTE: As per the paper, this should be applied to the ENTIRE snippet
+    (6×16×512) together, not per-observation. This ensures ON and OFF 
+    observations are on the same scale.
+    
     Args:
         data: Input array with positive values.
         
@@ -43,11 +47,14 @@ def preprocess_batch(data: np.ndarray) -> np.ndarray:
     """
     Preprocess a batch of cadence data.
     
+    As per the paper: normalizes the ENTIRE snippet (6×16×512) together,
+    not per-observation. This ensures ON and OFF are on the same scale.
+    
     Args:
         data: Array of shape (batch, 6, height, width)
         
     Returns:
-        Preprocessed array with added channel dimension: (batch, 6, height, width, 1)
+        Preprocessed array: (batch, 6, height, width)
     """
     batch_size = data.shape[0]
     height = data.shape[2]
@@ -56,8 +63,9 @@ def preprocess_batch(data: np.ndarray) -> np.ndarray:
     result = np.zeros((batch_size, 6, height, width), dtype=np.float32)
     
     for i in prange(batch_size):
-        for j in range(6):
-            result[i, j, :, :] = normalize_log(data[i, j, :, :])
+        # Normalize ENTIRE snippet together (all 6 observations)
+        # This is the key difference from per-observation normalization
+        result[i, :, :, :] = normalize_log(data[i, :, :, :])
     
     return result
 

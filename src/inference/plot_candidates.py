@@ -17,6 +17,12 @@ import csv
 from typing import List, Tuple
 
 from ..data.loader import SRTDataLoader
+from ..utils.preprocessing import preprocess, downscale
+
+# Constants (must match training/inference pipeline)
+SNIPPET_WIDTH = 4096
+DOWNSAMPLE_FACTOR = 8
+FINAL_FREQ_BINS = 512
 
 
 def load_candidates(csv_path: str) -> List[dict]:
@@ -40,10 +46,6 @@ def plot_candidate_processed(cadence_data: np.ndarray,
     """
     Plot the 16x512 processed snippet that the model sees.
     """
-    SNIPPET_WIDTH = 4096
-    DOWNSAMPLE_FACTOR = 8
-    FINAL_FREQ_BINS = 512
-    
     # Extract snippet
     start = max(0, center_channel - SNIPPET_WIDTH // 2)
     end = min(cadence_data.shape[2], center_channel + SNIPPET_WIDTH // 2)
@@ -154,14 +156,9 @@ def plot_all_candidates(file_paths: List[str],
         # Load only the 4096 channels around the candidate
         snippet_data = load_snippet_from_files(file_paths, cand['center_channel'], width=4096)
         
-        # Create a "fake" cadence_data with just this snippet (centered at 0)
-        # Process the snippet
-        DOWNSAMPLE_FACTOR = 8
-        FINAL_FREQ_BINS = 512
-        
+        # Downscale using the SAME function as training/inference
         if snippet_data.shape[2] >= 4096:
-            # Downsample to 512 bins
-            snippet_ds = snippet_data.reshape(6, snippet_data.shape[1], FINAL_FREQ_BINS, DOWNSAMPLE_FACTOR).mean(axis=3)
+            snippet_ds = downscale(snippet_data, factor=8)  # (6, 16, 512)
         else:
             snippet_ds = snippet_data
         
@@ -172,17 +169,9 @@ def plot_all_candidates(file_paths: List[str],
             processed = all_data
             cbar_label = 'Log Power (raw)'
         else:
-            # Preprocessed mode: log + per-observation min-max normalization
-            processed = np.zeros_like(snippet_ds)
-            for j in range(6):
-                obs_data = snippet_ds[j].astype(np.float64)
-                obs_data = np.log(np.abs(obs_data) + 1e-10)
-                if obs_data.size > 0:
-                    obs_data = obs_data - obs_data.min()
-                    max_val = obs_data.max()
-                    if max_val > 0:
-                        obs_data = obs_data / max_val
-                processed[j] = obs_data
+            # Preprocessed mode: use EXACT same preprocessing as training/inference
+            # Add batch dim, preprocess, remove batch dim
+            processed = preprocess(snippet_ds[np.newaxis, ...], add_channel=False)[0]
             vmin, vmax = 0, 1
             cbar_label = 'Log-Normalized Power [0-1]'
         
@@ -344,7 +333,7 @@ def main():
                 skipped += 1
                 continue
             
-            output_dir = target_dir / "plots_overlap"
+            output_dir = target_dir / "plots"
             
             print(f"  Plotting {len(candidates)} candidates...")
             plot_all_candidates(
