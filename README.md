@@ -64,7 +64,7 @@ python scripts/train_large_scale.py \
 ┌─────────────────────────────────────────────────────────────┐
 │                    INFERENCE PIPELINE                       │
 ├─────────────────────────────────────────────────────────────┤
-│  .fil files → Downscale 8x → Per-snippet Normalize → VAE    │
+│  .h5 files → Downscale 8x → Per-snippet Normalize → VAE     │
 │                                                             │
 │  Encoder → Latent (8D) → Combine 6 obs → RF → P(ETI)        │
 └─────────────────────────────────────────────────────────────┘
