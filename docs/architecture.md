@@ -12,13 +12,13 @@ The pipeline uses a two-stage approach:
 
 ```
 ┌──────────────────────────────────────────────────────────────────┐
-│                         INPUT                                     │
-│  6 observations × 16 time bins × 4096 frequency channels         │
+│                           INPUT                                  │
+│      6 observations × 16 time bins × 4096 frequency channels     │
 └─────────────────────────────┬────────────────────────────────────┘
                               │
                               ▼
 ┌──────────────────────────────────────────────────────────────────┐
-│                     PREPROCESSING                                 │
+│                     PREPROCESSING                                │
 │  1. Downscale 8x: (6, 16, 4096) → (6, 16, 512)                   │
 │  2. Log normalize per-snippet: all 6 obs together                │
 │  3. Add channel dim: (6, 16, 512, 1)                             │
@@ -26,22 +26,22 @@ The pipeline uses a two-stage approach:
                               │
                               ▼
 ┌──────────────────────────────────────────────────────────────────┐
-│                       VAE ENCODER                                 │
-│  9 Conv2D layers → Flatten → Dense(512) → z_mean, z_log_var     │
+│                       VAE ENCODER                                │
+│  9 Conv2D layers → Flatten → Dense(512) → z_mean, z_log_var      │
 │  Output: 8-dimensional latent vector per observation             │
 └─────────────────────────────┬────────────────────────────────────┘
                               │
                               ▼
 ┌──────────────────────────────────────────────────────────────────┐
-│                    LATENT COMBINATION                             │
+│                    LATENT COMBINATION                            │
 │  Concatenate 6 latent vectors: 6 × 8 = 48 dimensions             │
 └─────────────────────────────┬────────────────────────────────────┘
                               │
                               ▼
 ┌──────────────────────────────────────────────────────────────────┐
-│                    RANDOM FOREST                                  │
-│  Input: 48D vector                                                │
-│  Output: P(ETI) probability                                       │
+│                    RANDOM FOREST                                 │
+│  Input: 48D vector                                               │
+│  Output: P(ETI) probability                                      │
 └──────────────────────────────────────────────────────────────────┘
 ```
 
