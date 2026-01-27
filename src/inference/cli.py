@@ -39,6 +39,7 @@ def cmd_process(args):
             threshold=args.threshold,
             n_chunks=args.chunks,
             batch_size=args.batch_size,
+            overlap=getattr(args, 'overlap', False),
             verbose=not args.quiet
         )
         result = pipeline.process_cadence(file_paths=args.files)
@@ -60,22 +61,48 @@ def cmd_process(args):
     if args.output:
         output_path = Path(args.output)
         
-        if output_path.suffix == '.json':
+        # If it's a directory or ends with /, save files inside it
+        if output_path.is_dir() or str(args.output).endswith('/'):
+            output_path.mkdir(parents=True, exist_ok=True)
+            all_path = output_path / "all_snippets.csv"
+            candidates_path = output_path / "candidates.csv"
+        elif output_path.suffix == '.json':
             with open(output_path, 'w') as f:
                 json.dump(result.to_dict(), f, indent=2)
             print(f"\nResults saved to {output_path}")
-            
+            all_path = None
+            candidates_path = None
         elif output_path.suffix == '.csv':
-            # Save ALL snippets to *_all.csv
             all_path = output_path.with_name(output_path.stem + '_all.csv')
+            candidates_path = output_path.with_name(output_path.stem + '_candidates.csv')
+        else:
+            # Treat as directory
+            output_path.mkdir(parents=True, exist_ok=True)
+            all_path = output_path / "all_snippets.csv"
+            candidates_path = output_path / "candidates.csv"
+        
+        # Save metadata.json if output is a directory
+        if output_path.is_dir():
+            metadata_path = output_path / "metadata.json"
+            with open(metadata_path, 'w') as f:
+                json.dump({
+                    'target': result.source_name,
+                    'files': [str(p) for p in args.files],
+                    'threshold': args.threshold,
+                    'n_snippets': len(result.snippets),
+                    'n_detections': result.n_detections
+                }, f, indent=2)
+            print(f"  📋 Metadata:     {metadata_path}")
+        
+        # Save CSV files if paths are set
+        if all_path:
             with open(all_path, 'w', newline='') as f:
                 writer = csv.writer(f)
                 writer.writerow(['freq_mhz', 'probability', 'is_eti', 'center_channel'])
                 for s in result.snippets:
                     writer.writerow([s.freq_mhz, s.eti_probability, s.is_eti, s.center_channel])
-            
-            # Save only ETI candidates to *_candidates.csv
-            candidates_path = output_path.with_name(output_path.stem + '_candidates.csv')
+        
+        if candidates_path:
             with open(candidates_path, 'w', newline='') as f:
                 writer = csv.writer(f)
                 writer.writerow(['freq_mhz', 'probability', 'is_eti', 'center_channel'])
@@ -277,7 +304,38 @@ def cmd_listfile(args):
         else:
             print(f"  📄 Appending to existing summary: {summary_path}")
     
+    # Prefetch function for HDD optimization
+    from concurrent.futures import ThreadPoolExecutor
+    
+    def prefetch_cadence(file_paths):
+        """Pre-load cadence data in background thread.
+        
+        Reads files sequentially to populate OS disk cache,
+        so when the pipeline loads them they're in RAM.
+        """
+        for fp in file_paths:
+            try:
+                # Read file in large chunks to populate OS cache
+                # This is faster than blimpy for raw prefetch
+                with open(fp, 'rb') as f:
+                    while True:
+                        chunk = f.read(64 * 1024 * 1024)  # 64 MB chunks
+                        if not chunk:
+                            break
+            except:
+                pass
+        return file_paths
+    
+    # Process with prefetching
+    prefetch_executor = ThreadPoolExecutor(max_workers=1)
+    prefetch_future = None
+    
     for i, (target_name, file_paths) in enumerate(cadences, 1):
+        # Start prefetching NEXT cadence while we process current one
+        if i < len(cadences):
+            next_target, next_files = cadences[i]
+            prefetch_future = prefetch_executor.submit(prefetch_cadence, next_files)
+        
         print(f"[{i}/{len(cadences)}] {target_name}...", end=' ', flush=True)
         
         try:
@@ -405,6 +463,8 @@ def main():
                                 help='Number of frequency chunks (default: 8, used with --optimized)')
     process_parser.add_argument('--batch-size', type=int, default=256,
                                 help='Batch size for GPU encoding (default: 256, used with --optimized)')
+    process_parser.add_argument('--overlap', action='store_true',
+                                help='Use 50%% overlapping windows for better signal coverage (2x more snippets)')
     process_parser.set_defaults(func=cmd_process)
     
     # Info command

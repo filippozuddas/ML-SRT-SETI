@@ -28,8 +28,8 @@ print("=" * 70)
 # CONFIGURATION
 # ============================================
 DATA_PATH = Path(__file__).parent.parent / "assets" / "top_8_data.pkl"
-ENCODER_PATH = Path(__file__).parent.parent / "results" / "real_obs_training" / "K_band_2" / "encoder_final.keras"
-RF_PATH = Path(__file__).parent.parent / "results" / "real_obs_training" / "K_band_2" / "random_forest.joblib"
+ENCODER_PATH = Path(__file__).parent.parent / "results" / "real_obs_training" / "C_band" / "encoder_final.keras"
+RF_PATH = Path(__file__).parent.parent / "results" / "real_obs_training" / "C_band" / "random_forest.joblib"
 THRESHOLD = 0.5
 
 print(f"\nConfiguration:")

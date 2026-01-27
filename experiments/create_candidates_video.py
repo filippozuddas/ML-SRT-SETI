@@ -18,9 +18,13 @@ import re
 from typing import List, Tuple
 
 
-def find_candidate_plots(inference_dir: Path) -> List[Tuple[str, str, Path]]:
+def find_candidate_plots(inference_dir: Path, target_filter: str = None) -> List[Tuple[str, str, Path]]:
     """
     Find all candidate plot images in inference directory.
+    
+    Args:
+        inference_dir: Root inference directory
+        target_filter: Optional target name to filter (only include this target)
     
     Returns list of (target_name, candidate_info, image_path) tuples.
     """
@@ -28,6 +32,10 @@ def find_candidate_plots(inference_dir: Path) -> List[Tuple[str, str, Path]]:
     
     for target_dir in sorted(inference_dir.iterdir()):
         if not target_dir.is_dir():
+            continue
+        
+        # Apply target filter if specified
+        if target_filter and target_dir.name != target_filter:
             continue
         
         plots_dir = target_dir / "plots"
@@ -154,6 +162,8 @@ def main():
                         help='Video width (default: 1920)')
     parser.add_argument('--height', type=int, default=1080,
                         help='Video height (default: 1080)')
+    parser.add_argument('--target', '-t', type=str, default=None,
+                        help='Filter to specific target name (e.g., TIC241173474)')
     
     args = parser.parse_args()
     
@@ -163,8 +173,9 @@ def main():
         return
     
     # Find all candidate plots
-    plots = find_candidate_plots(inference_dir)
-    print(f"Found {len(plots)} candidate plots in {inference_dir}")
+    plots = find_candidate_plots(inference_dir, args.target)
+    filter_msg = f" (filtered to {args.target})" if args.target else ""
+    print(f"Found {len(plots)} candidate plots in {inference_dir}{filter_msg}")
     
     if not plots:
         return

@@ -1,0 +1,14 @@
+{
+  "target": "Unknown",
+  "files": [
+    "/content/filippo/ML-SRT-SETI/data/TIC368536386/guppi_60449_41627_914535_TIC368536386_ON_0001.0000.h5",
+    "/content/filippo/ML-SRT-SETI/data/TIC368536386/guppi_60449_41947_916322_TIC368536386_OFF_0001.0000.h5",
+    "/content/filippo/ML-SRT-SETI/data/TIC368536386/guppi_60449_42267_918109_TIC368536386_ON_0001.0000.h5",
+    "/content/filippo/ML-SRT-SETI/data/TIC368536386/guppi_60449_42588_919907_TIC368536386_OFF_0001.0000.h5",
+    "/content/filippo/ML-SRT-SETI/data/TIC368536386/guppi_60449_42910_921705_TIC368536386_ON_0001.0000.h5",
+    "/content/filippo/ML-SRT-SETI/data/TIC368536386/guppi_60449_43233_923509_TIC368536386_OFF_0001.0000.h5"
+  ],
+  "threshold": 0.9,
+  "n_snippets": 32764,
+  "n_detections": 705
+}

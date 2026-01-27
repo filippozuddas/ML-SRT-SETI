@@ -6,3 +6,4 @@ __pycache__
 *.keras
 *.mp4
 *.joblib
+*.mmap

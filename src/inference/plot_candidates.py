@@ -109,20 +109,39 @@ def plot_candidate_processed(cadence_data: np.ndarray,
 
 
 def load_snippet_from_files(file_paths: List[str], center_channel: int, width: int = 4096) -> np.ndarray:
-    """Load only the required frequency slice from HDF5 files.
+    """Load only the required frequency slice from observation files.
     
-    This is MUCH faster than loading the entire file when we only need a small slice.
+    Supports both HDF5 (.h5) and filterbank (.fil) formats via blimpy.
     """
-    import h5py
+    from blimpy import Waterfall
+    import warnings
     
     snippets = []
     start = max(0, center_channel - width // 2)
     end = start + width
     
     for path in file_paths:
-        with h5py.File(path, 'r') as f:
-            # Slice DIRECTLY on the HDF5 dataset - only loads the slice, not the whole file
-            data = f['data'][:, 0, start:end]  # (time, freq_slice)
+        with warnings.catch_warnings():
+            warnings.simplefilter("ignore")
+            # Load header to get frequency info
+            wf = Waterfall(str(path), load_data=False)
+            fch1 = wf.header['fch1']
+            foff = wf.header['foff']
+            
+            # Calculate frequency range for this channel slice
+            # Note: foff can be negative (freq decreases with channel)
+            if foff < 0:
+                f_start = fch1 + end * foff  # Higher channel = lower freq
+                f_stop = fch1 + start * foff
+            else:
+                f_start = fch1 + start * foff
+                f_stop = fch1 + end * foff
+            
+            # Load only the needed frequency slice
+            wf = Waterfall(str(path), f_start=f_start, f_stop=f_stop)
+            data = wf.data.squeeze()
+            if data.ndim == 1:
+                data = data[np.newaxis, :]
             snippets.append(data)
     
     return np.array(snippets)  # (6, time, freq_slice)

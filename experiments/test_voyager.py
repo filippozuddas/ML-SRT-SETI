@@ -32,7 +32,7 @@ print("=" * 70)
 # CONFIGURATION
 # ============================================
 # Voyager data files (ON/OFF/ON/OFF/ON/OFF pattern)
-DATA_DIR = Path(__file__).parent.parent / "data"
+DATA_DIR = Path(__file__).parent.parent / "data" / "voyager"
 
 VOYAGER_FILES = [
     DATA_DIR / "single_coarse_guppi_59046_80036_DIAG_VOYAGER-1_0011.rawspec.0000.h5",   # ON
@@ -43,8 +43,8 @@ VOYAGER_FILES = [
     DATA_DIR / "single_coarse_guppi_59046_81628_DIAG_VOYAGER-1_OFF_0016.rawspec.0000.h5", # OFF
 ]
 
-ENCODER_PATH = Path(__file__).parent.parent / "results" / "real_obs_training" / "K_band" / "encoder_final.keras"
-RF_PATH = Path(__file__).parent.parent / "results" / "real_obs_training" / "K_band" / "random_forest.joblib"
+ENCODER_PATH = Path(__file__).parent.parent / "results" / "real_obs_training" / "C_band" / "encoder_final.keras"
+RF_PATH = Path(__file__).parent.parent / "results" / "real_obs_training" / "C_band" / "random_forest.joblib"
 OUTPUT_DIR = Path(__file__).parent.parent / "results" / "tests" / "voyager"
 OUTPUT_DIR.mkdir(parents=True, exist_ok=True)
 THRESHOLD = 0.5

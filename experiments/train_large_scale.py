@@ -86,6 +86,10 @@ def parse_args():
     parser.add_argument('--workers', '-w', type=int, default=46,
                         help='Number of CPU workers for data generation (default: 46)')
     
+    # Memory optimization
+    parser.add_argument('--mmap', action='store_true',
+                        help='Use memory-mapped plate file (requires .mmap file, saves RAM)')
+    
     return parser.parse_args()
 
 
@@ -155,6 +159,9 @@ OUTPUT_DIR.mkdir(parents=True, exist_ok=True)
 
 # Workers
 NUM_WORKERS = args.workers
+
+# Memory-mapped plate
+USE_MMAP = args.mmap
 
 print(f"\nConfiguration:")
 print(f"  Training batches: {NUM_BATCHES}")
@@ -249,15 +256,39 @@ import os
 # Load SRT plate if configured
 SRT_PLATE = None
 SRT_PLATE_PATH_FOR_WORKERS = None  # Path for workers to load
+SRT_PLATE_SHAPE = None  # For mmap
+SRT_PLATE_DTYPE = None  # For mmap
 
 if USE_SRT_PLATE:
     print(f"\nLoading SRT plate from {SRT_PLATE_PATH}...")
     try:
-        plate_data = np.load(SRT_PLATE_PATH)
-        SRT_PLATE = plate_data['backgrounds']
-        SRT_PLATE_PATH_FOR_WORKERS = SRT_PLATE_PATH
-        print(f"  Loaded plate shape: {SRT_PLATE.shape}")
-        print(f"  Using {len(SRT_PLATE)} real SRT backgrounds for signal injection")
+        if USE_MMAP:
+            # Memory-mapped loading (shared across workers)
+            import json
+            mmap_path = SRT_PLATE_PATH
+            meta_path = str(SRT_PLATE_PATH).replace('.mmap', '.meta.json')
+            
+            with open(meta_path, 'r') as f:
+                meta = json.load(f)
+            
+            SRT_PLATE_SHAPE = tuple(meta['shape'])
+            SRT_PLATE_DTYPE = np.dtype(meta['dtype'])
+            
+            SRT_PLATE = np.memmap(mmap_path, dtype=SRT_PLATE_DTYPE, mode='r', shape=SRT_PLATE_SHAPE)
+            SRT_PLATE_PATH_FOR_WORKERS = SRT_PLATE_PATH
+            
+            print(f"  ✓ Memory-mapped plate loaded!")
+            print(f"  Shape: {SRT_PLATE.shape}")
+            print(f"  Using {len(SRT_PLATE)} real backgrounds (SHARED MEMORY)")
+        else:
+            # Standard loading (copied to each worker)
+            plate_data = np.load(SRT_PLATE_PATH)
+            SRT_PLATE = plate_data['backgrounds']
+            SRT_PLATE_PATH_FOR_WORKERS = SRT_PLATE_PATH
+            SRT_PLATE_SHAPE = SRT_PLATE.shape
+            SRT_PLATE_DTYPE = SRT_PLATE.dtype
+            print(f"  Loaded plate shape: {SRT_PLATE.shape}")
+            print(f"  Using {len(SRT_PLATE)} real SRT backgrounds for signal injection")
     except FileNotFoundError:
         print(f"  WARNING: SRT plate not found at {SRT_PLATE_PATH}")
         print(f"  Falling back to synthetic Gaussian noise")
@@ -267,11 +298,19 @@ if USE_SRT_PLATE:
 _WORKER_PLATE = None
 _WORKER_PLATE_PATH = None
 
-def _init_worker(plate_path):
-    """Initialize worker with plate loaded from file."""
+def _init_worker(plate_path, use_mmap=False, shape=None, dtype=None):
+    """Initialize worker with plate loaded from file.
+    
+    With mmap=True, workers share the same memory region.
+    """
     global _WORKER_PLATE, _WORKER_PLATE_PATH
     if plate_path is not None and plate_path != _WORKER_PLATE_PATH:
-        _WORKER_PLATE = np.load(plate_path)['backgrounds']
+        if use_mmap and shape is not None:
+            # Memory-mapped: shares memory with parent process
+            _WORKER_PLATE = np.memmap(plate_path, dtype=dtype, mode='r', shape=shape)
+        else:
+            # Standard: copies entire plate to worker memory
+            _WORKER_PLATE = np.load(plate_path)['backgrounds']
         _WORKER_PLATE_PATH = plate_path
 
 def _generate_true_sample(args):
@@ -308,7 +347,8 @@ def generate_training_data(num_samples, seed=None):
     false_args = [(base_seed + 100000 + i, SNR_BASE, SNR_RANGE) for i in range(num_samples * 6)]
     
     # Generate in parallel with initializer
-    with Pool(NUM_WORKERS, initializer=_init_worker, initargs=(SRT_PLATE_PATH_FOR_WORKERS,)) as pool:
+    init_args = (SRT_PLATE_PATH_FOR_WORKERS, USE_MMAP, SRT_PLATE_SHAPE, SRT_PLATE_DTYPE)
+    with Pool(NUM_WORKERS, initializer=_init_worker, initargs=init_args) as pool:
         print(f"  Generating {num_samples} VAE samples...")
         vae_cadences = list(tqdm(pool.imap(_generate_true_sample, vae_args), 
                                   total=num_samples, desc="VAE", leave=False))
