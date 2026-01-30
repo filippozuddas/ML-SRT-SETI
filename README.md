@@ -1,6 +1,6 @@
 # ML-SRT-SETI: Machine Learning Signal Detection for SETI
 
-A semi-unsupervised machine learning pipeline for detecting technosignatures in radio telescope observations. Originally developed for the Green Bank Telescope (GBT), adapted for the Sardinian Radio Telescope (SRT).
+A semi-unsupervised deep learning pipeline for detecting technosignatures in radio telescope observations. Originally developed for the Green Bank Telescope (GBT), adapted for the Sardinian Radio Telescope (SRT).
 
 ## References
 
@@ -9,12 +9,12 @@ A semi-unsupervised machine learning pipeline for detecting technosignatures in 
 
 ## 🎯 Overview
 
-This pipeline uses a **β-VAE** (Variational Autoencoder) combined with a **Random Forest classifier** to detect potential extraterrestrial signals that:
+This pipeline uses a custom **β-VAE** (Variational Autoencoder) combined with a **Random Forest classifier** to detect potential extraterrestrial signals that:
 - Appear only in "ON-source" observations (when pointing at a target)
 - Disappear in "OFF-source" observations (when pointing away)
-- Show Doppler drift consistent with an extraterrestrial origin
+- Show Doppler drift due to non-uniform relative motion between the signal source and the receiver
 
-The system achieves **>97% accuracy** in distinguishing ETI-like signals from RFI (Radio Frequency Interference) on synthetic test data.
+The system achieves **~97% accuracy** in distinguishing ETI-like signals from RFI (Radio Frequency Interference) on synthetic test data.
 
 ## 🚀 Quick Start
 
@@ -22,7 +22,7 @@ The system achieves **>97% accuracy** in distinguishing ETI-like signals from RF
 
 ```bash
 # Clone repository
-git clone https://github.com/your-repo/ML_SRT_SETI.git
+git clone https://github.com/your-repo/ML-SRT-SETI.git
 cd ML_SRT_SETI
 
 # Create environment
@@ -50,7 +50,7 @@ python -m src.inference.cli listfile \
 
 ```bash
 # Large-scale training with SRT backgrounds
-python scripts/train_large_scale.py \
+python experiments/train_large_scale.py \
     --batches 15 \
     --samples 2500 \
     --epochs 100 \
@@ -64,9 +64,9 @@ python scripts/train_large_scale.py \
 ┌─────────────────────────────────────────────────────────────┐
 │                    INFERENCE PIPELINE                       │
 ├─────────────────────────────────────────────────────────────┤
-│  .h5 files → Downscale 8x → Per-snippet Normalize → VAE     │
+│   .h5 files → Downscale 8x → Per-snippet Normalize → VAE    │
 │                                                             │
-│  Encoder → Latent (8D) → Combine 6 obs → RF → P(ETI)        │
+│    Encoder → Latent (8D) → Combine 6 obs → RF → P(ETI)      │
 └─────────────────────────────────────────────────────────────┘
 ```
 
@@ -94,17 +94,6 @@ ML_GBT_SETI/
 └── configs/            # Configuration files
 ```
 
-## 📊 Performance
-
-| Metric | Value |
-|--------|-------|
-| Accuracy | 97.7% |
-| AUC-ROC | 0.996 |
-| True Positive Rate | 98.5% |
-| False Positive Rate | 0.7% |
-
-*Evaluated on 4000 synthetic samples with SRT backgrounds.*
-
 ## 📖 Documentation
 
 - [Architecture Details](docs/architecture.md)
@@ -117,7 +106,7 @@ ML_GBT_SETI/
 - **Optimized Pipeline**: Process 67M-channel files with chunked loading
 - **Multi-GPU Training**: MirroredStrategy for dual-GPU training
 - **SRT Adaptation**: Real SRT backgrounds for realistic training data
-- **Per-snippet Normalization**: Preserves ON/OFF relative contrast (as per paper)
+- **Per-snippet Normalization**: Preserves ON/OFF relative contrast 
 - **Overlap Mode**: 50% overlapping windows for better signal coverage
 
 ## 📝 Citation
