@@ -1,10 +1,10 @@
 # ML-SRT-SETI: Machine Learning Signal Detection for SETI
 
-A semi-unsupervised deep learning pipeline for detecting technosignatures in radio telescope observations. Originally developed for the Green Bank Telescope (GBT), adapted for the Sardinian Radio Telescope (SRT).
+A semi-supervised deep learning pipeline for detecting technosignatures in radio telescope observations. Originally developed for the Green Bank Telescope (GBT), adapted for the Sardinian Radio Telescope (SRT).
 
 ## References
 
-- Original paper: [**"A Semi-Supervised Machine Learning Approach to Detecting Technosignatures"**](https://arxiv.org/abs/2301.12670)
+- Original paper: [**"A deep-learning search for technosignatures of 820 nearby stars"**](https://arxiv.org/abs/2301.12670)
 - Original repository: [**PetchMa/ML_GBT_SETI**](https://github.com/PetchMa/ML_GBT_SETI)
 
 ## 🎯 Overview
@@ -23,7 +23,7 @@ The system achieves **~97% accuracy** in distinguishing ETI-like signals from RF
 ```bash
 # Clone repository
 git clone https://github.com/your-repo/ML-SRT-SETI.git
-cd ML_SRT_SETI
+cd ML-SRT-SETI
 
 # Create environment
 conda env create -f environment.yml
@@ -108,3 +108,18 @@ ML_GBT_SETI/
 - **SRT Adaptation**: Real SRT backgrounds for realistic training data
 - **Per-snippet Normalization**: Preserves ON/OFF relative contrast 
 - **Overlap Mode**: 50% overlapping windows for better signal coverage
+
+## 📝 Citation
+
+```bibtex
+@article{ma2023semi,
+  title={A Semi-Supervised Machine Learning Approach to Detecting Technosignatures},
+  author={Ma, Peter and others},
+  journal={arXiv preprint arXiv:2301.12670},
+  year={2023}
+}
+```
+
+## 📄 License
+
+This project is licensed under the MIT License.
