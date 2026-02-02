@@ -1,0 +1,36 @@
+# ML-SRT-SETI Requirements
+# Tested on Google Colab (Python 3.10, CUDA 12.2)
+
+# Core ML
+tensorflow>=2.15.0
+keras>=3.0.0
+
+# Scientific computing
+numpy>=1.24.0
+scipy>=1.11.0
+pandas>=2.0.0
+
+# Image processing & ML
+scikit-image>=0.21.0
+scikit-learn>=1.3.0
+
+# Radio astronomy
+setigen>=2.4.0
+blimpy>=2.1.0
+astropy>=6.0.0
+
+# Performance
+numba>=0.58.0
+joblib>=1.3.0
+
+# Visualization
+matplotlib>=3.8.0
+
+# Utilities
+tqdm>=4.66.0
+h5py>=3.10.0
+psutil>=5.9.0
+
+# Video generation (for candidate plots)
+opencv-python>=4.8.0
+Pillow>=10.0.0
