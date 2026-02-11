@@ -14,7 +14,7 @@ This pipeline uses a custom **β-VAE** (Variational Autoencoder) combined with a
 - Disappear in "OFF-source" observations (when pointing away)
 - Show Doppler drift due to non-uniform relative motion between the signal source and the receiver
 
-The system achieves **~97% accuracy** in distinguishing ETI-like signals from RFI (Radio Frequency Interference) on synthetic test data.
+The system achieves **~99% accuracy** in distinguishing ETI-like signals from RFI (Radio Frequency Interference) on synthetic test data.
 
 ## 🚀 Quick Start
 
@@ -94,7 +94,7 @@ ML-SRT-SETI/
 │   └── visualizations/ # Latent space, traversal, and SNR sensitivity plots
 ├── src/              # Core source code of the project:
 │   ├── data/         # Data loading, dataset building, and synthetic signal/noise generation
-│   ├── inference/    # Inference pipelines and plotting utilities (including paper-style plots)
+│   ├── inference/    # Inference pipelines and plotting utilities 
 │   ├── models/       # Neural network architectures (encoders, decoders, sampling layers)
 │   └── utils/        # Shared utilities for configuration, preprocessing, and visualization
 ├── environment.yml   # Conda environment specification
