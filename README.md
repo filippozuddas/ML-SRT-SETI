@@ -80,18 +80,25 @@ python experiments/train_large_scale.py \
 ## 📁 Project Structure
 
 ```
-ML_GBT_SETI/
-├── src/
-│   ├── data/           # Data loading and generation
-│   ├── models/         # VAE and classifier models
-│   ├── inference/      # Inference pipeline and CLI
-│   └── utils/          # Preprocessing utilities
-├── scripts/
-│   ├── train_large_scale.py    # Main training script
-│   └── evaluate_model.py       # Model evaluation
-├── notebooks/          # Visualization notebooks
-├── docs/               # Documentation
-└── configs/            # Configuration files
+ML-SRT-SETI/
+├── analysis/         # Scripts for post-processing and analysis (e.g., evaluating cadences, analyzing ON-OFF patterns, and debugging features)
+├── configs/          # YAML configuration files for training and inference pipelines (default, SRT-specific, testing)
+├── data/             # Datasets, metadata JSONs, and target lists for inference across different bands (e.g., 6GHz, 18GHz)
+├── docs/             # Detailed project documentation (architecture, preprocessing, training, inference)
+├── experiments/      # Executable scripts for running specific tasks (full training pipelines, evaluations, Voyager tests)
+├── notebooks/        # Jupyter notebooks for interactive data exploration and sample visualization
+├── results/          # Generated outputs and artifacts:
+│   ├── inference/    # Outputs from inference runs on target data
+│   ├── models/       # Saved trained model weights (.keras, .h5) and Random Forest classifiers (.joblib)
+│   ├── plots/        # Visualizations of candidates and model comparisons
+│   └── visualizations/ # Latent space, traversal, and SNR sensitivity plots
+├── src/              # Core source code of the project:
+│   ├── data/         # Data loading, dataset building, and synthetic signal/noise generation
+│   ├── inference/    # Inference pipelines and plotting utilities (including paper-style plots)
+│   ├── models/       # Neural network architectures (encoders, decoders, sampling layers)
+│   └── utils/        # Shared utilities for configuration, preprocessing, and visualization
+├── environment.yml   # Conda environment specification
+└── requirements.txt  # Python pip dependencies
 ```
 
 ## 📖 Documentation
