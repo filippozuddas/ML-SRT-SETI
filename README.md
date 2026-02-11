@@ -27,7 +27,7 @@ cd ML-SRT-SETI
 
 # Create environment
 conda env create -f environment.yml
-conda activate seti-ml
+conda activate ml-srt-seti
 
 # Or with pip
 pip install -r requirements.txt
