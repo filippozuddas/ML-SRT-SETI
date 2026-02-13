@@ -49,9 +49,9 @@ The pipeline uses a two-stage approach:
 
 The β-VAE follows a symmetric encoder-decoder structure. During training, both components work together: the **encoder** compresses the input spectrogram into a compact latent representation, and the **decoder** attempts to reconstruct the original spectrogram from that representation. The reconstruction loss ensures that the latent space retains enough information to faithfully represent the input data.
 
-However, the ultimate goal of the pipeline is not reconstruction — it is **classification**. The VAE acts as a feature extractor: once the model has learned a meaningful latent space, only the **encoder** is needed at inference time. Each observation is encoded into an 8-dimensional latent vector, and it is this vector — not the reconstructed spectrogram — that is passed to the Random Forest classifier. The decoder is discarded after training.
-
 ![VAE Architecture](images/vae_architecture.jpg)
+
+However, the ultimate goal of the pipeline is not reconstruction — it is **classification**. The VAE acts as a feature extractor: once the model has learned a meaningful latent space, only the **encoder** is needed at inference time. Each observation is encoded into an 8-dimensional latent vector, and it is this vector — not the reconstructed spectrogram — that is passed to the Random Forest classifier. The decoder is discarded after training.
 
 ### Encoder
 
