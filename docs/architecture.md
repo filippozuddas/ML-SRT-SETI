@@ -5,12 +5,13 @@ This document describes the technical architecture of the ML-SRT-SETI signal det
 ## Overview
 
 The pipeline uses a two-stage approach:
+
 1. **β-VAE** learns a compressed latent representation of radio observations
 2. **Random Forest** classifies cadence patterns as ETI or RFI
 
 ## Data Flow
 
-```
+```text
 ┌──────────────────────────────────────────────────────────────────┐
 │                         INPUT                                    │
 │  6 observations × 16 time bins × 4096 frequency channels         │
@@ -61,7 +62,7 @@ The encoder maps each observation spectrogram `(16, 512, 1)` to an 8-dimensional
 
 The latent code **z** is sampled using the **reparameterization trick**:
 
-```
+```text
 z = μ + σ × ε,    ε ~ N(0, I)
 ```
 
@@ -77,7 +78,7 @@ The decoder mirrors the encoder architecture using 9 transposed convolutional la
 
 The VAE uses a composite loss:
 
-```
+```text
 Total Loss = Reconstruction + β × KL + α × (True_Clustering + False_Clustering)
 ```
 
@@ -92,7 +93,7 @@ Total Loss = Reconstruction + β × KL + α × (True_Clustering + False_Clusteri
 
 The clustering loss is a contrastive term that shapes the latent space based on the expected cadence structure of SETI observations. Each cadence consists of **6 observations** alternating between the target source (ON) and nearby off-target positions (OFF):
 
-```
+```text
 Obs 1 (ON) → Obs 2 (OFF) → Obs 3 (ON) → Obs 4 (OFF) → Obs 5 (ON) → Obs 6 (OFF)
 ```
 
@@ -110,7 +111,7 @@ For cadences containing genuine signals, the loss enforces **two separate cluste
 - **Intra-group attraction**: ON observations (1, 3, 5) are pulled together; OFF observations (2, 4, 6) are pulled together (using `loss_same`)
 - **Inter-group repulsion**: ON vectors are pushed away from OFF vectors (using `loss_diff`)
 
-```
+```text
 L_true = Σ loss_same(ON_i, ON_j) + Σ loss_same(OFF_i, OFF_j) + Σ loss_diff(ON_i, OFF_j)
 ```
 
@@ -122,7 +123,7 @@ For cadences without genuine signals (only noise or RFI), **all 6 observations s
 
 - **All pairs attracted**: all observations — both ON and OFF positions — are pulled together (using `loss_same` for every pair)
 
-```
+```text
 L_false = Σ loss_same(obs_i, obs_j)    ∀ i, j
 ```
 
@@ -154,17 +155,20 @@ Together, these two losses teach the encoder to produce latent representations w
 ## Key Design Decisions
 
 ### Per-Snippet Normalization
+
 The entire 6-observation snippet (6×16×512) is normalized together, not per-observation. This preserves the relative contrast between ON and OFF observations, which is crucial for detecting signals that appear only in ON.
 
 ### Latent Dimension (8)
+
 Compact enough to avoid overfitting, expressive enough to capture relevant features.
 
 ### 8x Downscaling
+
 Reduces computational load while preserving signal structure. Narrowband signals are still detectable after downscaling.
 
 ## Code References
 
 - **VAE Model**: `src/models/vae.py`
 - **Preprocessing**: `src/utils/preprocessing.py`
-- **Training**: `scripts/train_large_scale.py`
+- **Training**: `experiments/train_large_scale.py`
 - **Inference**: `src/inference/pipeline_optimized.py`
