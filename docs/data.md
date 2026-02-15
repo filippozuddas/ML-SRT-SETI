@@ -39,6 +39,8 @@ Signal injection uses [setigen](https://github.com/bbrzycki/setigen) to create s
 
 ### Sample Types
 
+<img src="images/sample.png" alt="Samples" width="900">
+
 #### True Samples (ETI-like Pattern)
 
 Signal appears **only in ON observations** (A1, A2, A3), simulating an extraterrestrial transmitter.
