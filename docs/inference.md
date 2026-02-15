@@ -118,11 +118,7 @@ python -m src.inference.plot_candidates \
 
 ## Threshold Selection
 
-| Threshold | Use Case |
-|-----------|----------|
-| 0.5 | Maximum recall (more false positives) |
-| 0.7 | Balanced (recommended) |
-| 0.9 | High precision (may miss weak signals) |
+The `--threshold` parameter controls the ETI detection sensitivity. A value of **0.7** is recommended for balanced precision/recall. Use lower values (0.5) for maximum recall or higher values (0.9) for high precision.
 
 ## VRAM Usage
 
