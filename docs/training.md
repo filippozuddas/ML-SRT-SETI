@@ -2,17 +2,28 @@
 
 This guide covers training the ML-SRT-SETI model from scratch.
 
-## Prerequisites
+## Development Environment
 
-- Python 3.10+
-- TensorFlow 2.15+
-- 2x NVIDIA GPU recommended (24GB VRAM each)
-- SRT background data plate
+The model was developed and trained using **Google Colab** with a local runtime, connected to a dedicated server with the following hardware:
+
+| Component | Specification |
+|-----------|---------------|
+| GPU | 2× NVIDIA RTX 4090 (24 GB VRAM each) |
+| RAM | 250 GB |
+| Training strategy | `tf.distribute.MirroredStrategy` (dual GPU) |
+
+Software stack:
+- **Python** 3.10
+- **TensorFlow** ≥ 2.15 with CUDA support
+- **setigen** for synthetic signal injection
+- **blimpy** for filterbank I/O
+
+Full dependency list: see `environment.yml` or `requirements.txt`.
 
 ## Quick Training
 
 ```bash
-python scripts/train_large_scale.py \
+python experiments/train_large_scale.py \
     --batches 15 \
     --samples 2500 \
     --epochs 100 \
@@ -77,7 +88,7 @@ Saved automatically to output directory:
 ## Resuming Training
 
 ```bash
-python scripts/train_large_scale.py \
+python experiments/train_large_scale.py \
     --batches 15 \
     --samples 2500 \
     --epochs 100 \
@@ -111,16 +122,8 @@ Random Forest Results:
   AUC-ROC:  0.9958
 ```
 
-## Hyperparameters
-
-| Parameter | Value | Notes |
-|-----------|-------|-------|
-| β (KL weight) | 1.5 | Paper default |
-| α (clustering weight) | 10.0 | Paper default |
-| Learning rate | 1e-4 | Adam optimizer |
-| Latent dimension | 8 | Compact but expressive |
-| SNR range | 10-50 | Signal strength variation |
-
 ## Code Reference
 
-Main training script: `scripts/train_large_scale.py`
+Main training script: `experiments/train_large_scale.py`
+
+For model hyperparameters (β, α, latent dimension, etc.), see [Architecture Details](architecture.md).
