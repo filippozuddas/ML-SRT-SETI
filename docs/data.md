@@ -39,7 +39,7 @@ Signal injection uses [setigen](https://github.com/bbrzycki/setigen) to create s
 
 ### Sample Types
 
-<img src="images/sample.png" alt="Samples" width="900">
+![Samples](images/sample.png)
 
 #### True Samples (ETI-like Pattern)
 
