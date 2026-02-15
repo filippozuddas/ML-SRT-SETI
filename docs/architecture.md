@@ -5,13 +5,12 @@ This document describes the technical architecture of the ML-SRT-SETI signal det
 ## Overview
 
 The pipeline uses a two-stage approach:
-
 1. **β-VAE** learns a compressed latent representation of radio observations
 2. **Random Forest** classifies cadence patterns as ETI or RFI
 
 ## Data Flow
 
-```text
+```
 ┌──────────────────────────────────────────────────────────────────┐
 │                         INPUT                                    │
 │  6 observations × 16 time bins × 4096 frequency channels         │
@@ -50,9 +49,9 @@ The pipeline uses a two-stage approach:
 
 The β-VAE follows a symmetric encoder-decoder structure. During training, both components work together: the **encoder** compresses the input spectrogram into a compact latent representation, and the **decoder** attempts to reconstruct the original spectrogram from that representation. The reconstruction loss ensures that the latent space retains enough information to faithfully represent the input data.
 
-![VAE Architecture](images/vae_architecture.jpg)
-
 However, the ultimate goal of the pipeline is not reconstruction — it is **classification**. The VAE acts as a feature extractor: once the model has learned a meaningful latent space, only the **encoder** is needed at inference time. Each observation is encoded into an 8-dimensional latent vector, and it is this vector — not the reconstructed spectrogram — that is passed to the Random Forest classifier. The decoder is discarded after training.
+
+![VAE Architecture](images/vae_architecture.jpg)
 
 ### Encoder
 
@@ -62,7 +61,7 @@ The encoder maps each observation spectrogram `(16, 512, 1)` to an 8-dimensional
 
 The latent code **z** is sampled using the **reparameterization trick**:
 
-```text
+```
 z = μ + σ × ε,    ε ~ N(0, I)
 ```
 
@@ -78,7 +77,7 @@ The decoder mirrors the encoder architecture using 9 transposed convolutional la
 
 The VAE uses a composite loss:
 
-```text
+```
 Total Loss = Reconstruction + β × KL + α × (True_Clustering + False_Clustering)
 ```
 
@@ -93,7 +92,7 @@ Total Loss = Reconstruction + β × KL + α × (True_Clustering + False_Clusteri
 
 The clustering loss is a contrastive term that shapes the latent space based on the expected cadence structure of SETI observations. Each cadence consists of **6 observations** alternating between the target source (ON) and nearby off-target positions (OFF):
 
-```text
+```
 Obs 1 (ON) → Obs 2 (OFF) → Obs 3 (ON) → Obs 4 (OFF) → Obs 5 (ON) → Obs 6 (OFF)
 ```
 
@@ -111,7 +110,7 @@ For cadences containing genuine signals, the loss enforces **two separate cluste
 - **Intra-group attraction**: ON observations (1, 3, 5) are pulled together; OFF observations (2, 4, 6) are pulled together (using `loss_same`)
 - **Inter-group repulsion**: ON vectors are pushed away from OFF vectors (using `loss_diff`)
 
-```text
+```
 L_true = Σ loss_same(ON_i, ON_j) + Σ loss_same(OFF_i, OFF_j) + Σ loss_diff(ON_i, OFF_j)
 ```
 
@@ -123,7 +122,7 @@ For cadences without genuine signals (only noise or RFI), **all 6 observations s
 
 - **All pairs attracted**: all observations — both ON and OFF positions — are pulled together (using `loss_same` for every pair)
 
-```text
+```
 L_false = Σ loss_same(obs_i, obs_j)    ∀ i, j
 ```
 
@@ -134,6 +133,13 @@ This ensures that when no signal is present, the encoder maps all observations i
 Together, these two losses teach the encoder to produce latent representations where the **pattern of distances within a cadence** is itself the discriminative feature: a cadence with a real signal will show two distinct clusters (ON vs OFF), while a noise-only cadence will show a single tight cluster. The downstream Random Forest classifier can then easily distinguish these two patterns from the concatenated 48D vector (6 × 8 latent dims).
 
 ## Random Forest Classifier
+
+The Random Forest operates on the **concatenated latent vectors** produced by the encoder. For each cadence of 6 observations, the encoder outputs a latent vector of 8 dimensions per observation; these are concatenated into a single **48-dimensional feature vector** (6 × 8) that captures the *pattern of distances* between ON and OFF observations in latent space.
+
+Random forest is suitable for this task because:
+- It is **lightweight and fast** to train. Since the VAE already learns the features, the classifier only needs to separate two well-defined clusters.
+- It does not require re-training of the encoder — if the latent space improves, a new RF can be trained in seconds on the new embeddings.
+- It provides **probability estimates** (`predict_proba`) that can be thresholded at inference time.
 
 | Parameter | Value |
 |-----------|-------|
@@ -155,15 +161,12 @@ Together, these two losses teach the encoder to produce latent representations w
 ## Key Design Decisions
 
 ### Per-Snippet Normalization
-
 The entire 6-observation snippet (6×16×512) is normalized together, not per-observation. This preserves the relative contrast between ON and OFF observations, which is crucial for detecting signals that appear only in ON.
 
 ### Latent Dimension (8)
-
 Compact enough to avoid overfitting, expressive enough to capture relevant features.
 
 ### 8x Downscaling
-
 Reduces computational load while preserving signal structure. Narrowband signals are still detectable after downscaling.
 
 ## Code References

@@ -4,9 +4,13 @@ This guide covers running inference on SRT observations.
 
 ## Prerequisites
 
-- Trained encoder model (`.keras`)
-- Trained Random Forest classifier (`.joblib`)
-- Target listfile with observation paths
+Running inference requires the three artifacts produced by the training script (`experiments/train_large_scale.py`):
+
+| Artifact | File | Description |
+|----------|------|-------------|
+| Encoder | `encoder_final.keras` | Trained VAE encoder |
+| Classifier | `random_forest.joblib` | Random Forest trained on latent features |
+| Listfile | `targets.txt` | Target names and 6 `.h5` observation paths per line |
 
 ## Basic Usage
 
@@ -63,7 +67,50 @@ python -m src.inference.cli listfile \
 Benefits:
 - Processes files chunk by chunk (reduces memory)
 - Larger batch sizes for faster GPU encoding
-- Overlap mode for better signal coverage
+- Overlap mode for better signal coverage (see below)
+
+## Overlapping Search
+
+### The Problem
+
+Without overlap, the frequency band is sliced into **non-overlapping 4096-channel windows**. A real signal whose energy straddles the boundary between two adjacent windows may be split across both, reducing the SNR in each and potentially causing a missed detection.
+
+```
+Non-overlapping (default):
+|----4096----|----4096----|----4096----|
+             ↑ signal split here
+```
+
+### The Solution
+
+With `--overlap`, windows advance by **2048 channels** (50% overlap). Every point in the band is covered by at least two windows, so a signal that is split in one window will be fully captured in the next:
+
+```
+Overlapping (--overlap):
+|----4096----|
+       |----4096----|
+              |----4096----|
+                    ↑ signal always fully inside at least one window
+```
+
+### Usage
+
+```bash
+python -m src.inference.cli listfile \
+    --list-file data/targets.txt \
+    --encoder models/encoder_final.keras \
+    --classifier models/random_forest.joblib \
+    --optimized --overlap \
+    --output results/
+```
+
+### Trade-offs
+
+| | Without overlap | With overlap |
+|--|-----------------|--------------|
+| Snippets | N | ~2N |
+| Coverage | Signals at boundaries may be split | ≥99.99% coverage |
+| Runtime | Baseline | ~2× |
 
 ## Output Files
 

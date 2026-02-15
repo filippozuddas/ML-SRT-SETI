@@ -122,6 +122,16 @@ Random Forest Results:
   AUC-ROC:  0.9958
 ```
 
+## End-to-End Pipeline
+
+The training script runs **three phases** automatically:
+
+1. **Phase 1 — VAE Training**: the β-VAE is trained across multiple batches with fresh synthetic data each batch, using early stopping and automatic rollback to the global best checkpoint if a catastrophic degradation is detected.
+2. **Phase 2 — Latent Evaluation**: 2 000 fresh cadences (true + false) are generated and encoded through the trained encoder. The resulting latent vectors are used to produce a latent-space visualization.
+3. **Phase 3 — Random Forest**: the 6 per-observation latent vectors of each cadence are concatenated into a single 48D feature vector. A `RandomForestClassifier` (1 000 trees, `max_features='sqrt'`) is trained on a 70/30 split and saved as `.joblib`.
+
+All three outputs — encoder, decoder, and classifier — are saved automatically at the end of the script. No separate step is required.
+
 ## Code Reference
 
 Main training script: `experiments/train_large_scale.py`
