@@ -7,7 +7,7 @@ A semi-supervised deep learning pipeline for detecting technosignatures in radio
 - Original paper: [**"A deep-learning search for technosignatures of 820 nearby stars"**](https://arxiv.org/abs/2301.12670)
 - Original repository: [**PetchMa/ML_GBT_SETI**](https://github.com/PetchMa/ML_GBT_SETI)
 
-## 🎯 Overview
+## Overview
 
 This pipeline uses a custom **β-VAE** (Variational Autoencoder) combined with a **Random Forest classifier** to detect potential extraterrestrial signals that:
 - Appear only in "ON-source" observations (when pointing at a target)
@@ -16,7 +16,7 @@ This pipeline uses a custom **β-VAE** (Variational Autoencoder) combined with a
 
 The system achieves **~99% accuracy** in distinguishing ETI-like signals from RFI (Radio Frequency Interference) on synthetic test data.
 
-## 🚀 Quick Start
+## Quick Start
 
 ### Installation
 
@@ -58,7 +58,7 @@ python experiments/train_large_scale.py \
     --output models/
 ```
 
-## 📐 Architecture
+## Architecture
 
 ```
 ┌─────────────────────────────────────────────────────────────┐
@@ -77,7 +77,7 @@ python experiments/train_large_scale.py \
 | **Contrastive Loss** | Clustering loss to separate ON/OFF patterns |
 | **Random Forest** | Classifies 48D cadence features (6 obs × 8 latent dims) |
 
-## 📁 Project Structure
+## Project Structure
 
 ```
 ML-SRT-SETI/
@@ -101,7 +101,7 @@ ML-SRT-SETI/
 └── requirements.txt  # Python pip dependencies
 ```
 
-## 📖 Documentation
+## Documentation
 
 - [Architecture Details](docs/architecture.md)
 - [Data & Preprocessing](docs/DATA.md)
@@ -109,7 +109,7 @@ ML-SRT-SETI/
 - [Inference Guide](docs/inference.md)
 
 
-## 🔬 Key Features
+## Key Features
 
 - **Optimized Pipeline**: Process 67M-channel files with chunked loading
 - **Multi-GPU Training**: MirroredStrategy for dual-GPU training
