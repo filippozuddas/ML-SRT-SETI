@@ -1,0 +1,14 @@
+{
+  "target": "Unknown",
+  "files": [
+    "/content/nvme_esterno/filippo/data/TIC352413427/guppi_60448_38573_414675_TIC352413427_ON_0001.0000.h5",
+    "/content/nvme_esterno/filippo/data/TIC352413427/guppi_60448_38890_416445_TIC352413427_OFF_0001.0000.h5",
+    "/content/nvme_esterno/filippo/data/TIC352413427/guppi_60448_39209_418226_TIC352413427_ON_0001.0000.h5",
+    "/content/nvme_esterno/filippo/data/TIC352413427/guppi_60448_39526_419996_TIC352413427_OFF_0001.0000.h5",
+    "/content/nvme_esterno/filippo/data/TIC352413427/guppi_60448_39843_421767_TIC352413427_ON_0001.0000.h5",
+    "/content/nvme_esterno/filippo/data/TIC352413427/guppi_60448_40158_423531_TIC352413427_OFF_0001.0000.h5"
+  ],
+  "threshold": 0.9,
+  "n_snippets": 32764,
+  "n_detections": 1063
+}

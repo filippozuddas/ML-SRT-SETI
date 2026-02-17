@@ -636,18 +636,21 @@ false_latents_cadence = recombine_latents(false_latents)
 print(f"  True cadence latents: {true_latents_cadence.shape}")
 print(f"  False cadence latents: {false_latents_cadence.shape}")
 
-# Plot latent space
+# Plot latent space (True as background, False on top for visibility)
 fig, axes = plt.subplots(2, 3, figsize=(15, 10))
 dim_pairs = [(0, 1), (2, 3), (4, 5), (0, 2), (1, 3), (0, 4)]
 
 for ax, (d1, d2) in zip(axes.flat, dim_pairs):
-    ax.scatter(false_latents[:, d1], false_latents[:, d2], 
-               alpha=0.3, s=10, c='blue', label='False')
+    # True first (background) - small, semi-transparent
     ax.scatter(true_latents[:, d1], true_latents[:, d2], 
-               alpha=0.3, s=10, c='red', label='True')
+               alpha=0.15, s=8, c='#FF6B6B', marker='o', label='True', zorder=1)
+    # False on top - larger, more opaque, distinct marker
+    ax.scatter(false_latents[:, d1], false_latents[:, d2], 
+               alpha=0.7, s=30, c='#1B4F72', marker='D', label='False', 
+               edgecolors='white', linewidths=0.3, zorder=2)
     ax.set_xlabel(f'Latent {d1}')
     ax.set_ylabel(f'Latent {d2}')
-    ax.legend()
+    ax.legend(markerscale=2, framealpha=0.9)
     ax.grid(True, alpha=0.3)
 
 plt.suptitle('Latent Space Visualization (Final Model)', fontsize=14)

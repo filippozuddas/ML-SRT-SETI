@@ -1,11 +1,29 @@
 #!/usr/bin/env python3
 """
 Evaluate the trained model and compute metrics (Accuracy, AUC-ROC, etc.)
+
+Usage:
+    python evaluate_model.py --encoder <path> --rf <path> --plate <path> --output <path>
+
+    Example (Band C):
+        python evaluate_model.py \
+            --encoder results/band_c/encoder_final.keras \
+            --rf results/band_c/random_forest.joblib \
+            --plate data/band_c/srt_backgrounds.npz \
+            --output results/band_c/
+
+    Example (Band K):
+        python evaluate_model.py \
+            --encoder results/band_k/encoder_final.keras \
+            --rf results/band_k/random_forest.joblib \
+            --plate data/band_k/srt_backgrounds.npz \
+            --output results/band_k/
 """
 
 import os
 os.environ['TF_CPP_MIN_LOG_LEVEL'] = '2'
 
+import argparse
 import numpy as np
 import tensorflow as tf
 import joblib
@@ -20,19 +38,56 @@ sys.path.insert(0, str(Path(__file__).parent.parent))
 from src.utils.preprocessing import preprocess, downscale, combine_cadences, recombine_latents
 from src.data.cadence_generator import CadenceGenerator, CadenceParams
 
+# ============================================
+# ARGUMENT PARSING
+# ============================================
+parser = argparse.ArgumentParser(
+    description="Evaluate a trained VAE+RF model and compute metrics (Accuracy, AUC-ROC, etc.)"
+)
+parser.add_argument(
+    "--encoder", type=str, required=True,
+    help="Path to the encoder model (.keras)"
+)
+parser.add_argument(
+    "--rf", type=str, required=True,
+    help="Path to the Random Forest model (.joblib)"
+)
+parser.add_argument(
+    "--plate", type=str, required=True,
+    help="Path to the SRT backgrounds plate (.npz)"
+)
+parser.add_argument(
+    "--output", type=str, required=True,
+    help="Output directory for metrics and plots"
+)
+parser.add_argument(
+    "--n-samples", type=int, default=2000,
+    help="Number of cadences per class for evaluation (default: 2000)"
+)
+args = parser.parse_args()
+
+ENCODER_PATH = Path(args.encoder)
+RF_PATH = Path(args.rf)
+PLATE_PATH = Path(args.plate)
+OUTPUT_DIR = Path(args.output)
+N_EVAL_SAMPLES = args.n_samples
+
+# Validate paths
+for p, name in [(ENCODER_PATH, "Encoder"), (RF_PATH, "Random Forest"), (PLATE_PATH, "Plate")]:
+    if not p.exists():
+        print(f"ERROR: {name} not found at: {p}")
+        sys.exit(1)
+
+OUTPUT_DIR.mkdir(parents=True, exist_ok=True)
+
 print("=" * 70)
 print("MODEL EVALUATION - METRICS")
 print("=" * 70)
-
-# ============================================
-# CONFIGURATION
-# ============================================
-ENCODER_PATH = Path("/content/filippo/ML-SRT-SETI/results/real_obs_training/K_band_2/encoder_final.keras")
-RF_PATH = Path("/content/filippo/ML-SRT-SETI/results/real_obs_training/K_band_2/random_forest.joblib")
-PLATE_PATH = Path("/content/filippo/ML-SRT-SETI/data/srt_training/backgrounds_18GHz.npz")
-OUTPUT_DIR = Path("/content/filippo/ML-SRT-SETI/results/real_obs_training/K_band_2")
-
-N_EVAL_SAMPLES = 2000  # Number of cadences for evaluation
+print(f"\n  Encoder:  {ENCODER_PATH}")
+print(f"  RF:       {RF_PATH}")
+print(f"  Plate:    {PLATE_PATH}")
+print(f"  Output:   {OUTPUT_DIR}")
+print(f"  Samples:  {N_EVAL_SAMPLES} per class")
 
 # ============================================
 # LOAD MODELS
