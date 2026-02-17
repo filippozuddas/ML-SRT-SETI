@@ -104,7 +104,7 @@ ML-SRT-SETI/
 ## Documentation
 
 - [Architecture Details](docs/architecture.md)
-- [Data & Preprocessing](docs/DATA.md)
+- [Data & Preprocessing](docs/data.md)
 - [Training Guide](docs/training.md)
 - [Inference Guide](docs/inference.md)
 
