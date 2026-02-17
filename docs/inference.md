@@ -159,7 +159,7 @@ After inference, generate candidate plots:
 ```bash
 python -m src.inference.plot_candidates \
     --candidates results/TARGET_NAME/candidates.csv \
-    --files obs1.fil,obs2.fil,obs3.fil,obs4.fil,obs5.fil,obs6.fil \
+    --files obs1.h5,obs2.h5,obs3.h5,obs4.h5,obs5.h5,obs6.h5 \
     --output results/TARGET_NAME/plots/
 ```
 
