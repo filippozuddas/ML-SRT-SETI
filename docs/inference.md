@@ -27,12 +27,12 @@ python -m src.inference.cli listfile \
 Each line contains a target name and 6 observation file paths:
 
 ```
-TARGET_NAME|path/to/obs1.fil,path/to/obs2.fil,path/to/obs3.fil,path/to/obs4.fil,path/to/obs5.fil,path/to/obs6.fil
+TARGET_NAME|path/to/obs1.h5,path/to/obs2.h5,path/to/obs3.h5,path/to/obs4.h5,path/to/obs5.h5,path/to/obs6.h5
 ```
 
 Example:
 ```
-TIC123456789|/data/obs_A1.fil,/data/obs_B.fil,/data/obs_A2.fil,/data/obs_C.fil,/data/obs_A3.fil,/data/obs_D.fil
+TIC123456789|/data/obs_A1.h5,/data/obs_B.h5,/data/obs_A2.h5,/data/obs_C.h5,/data/obs_A3.h5,/data/obs_D.h5
 ```
 
 ## Command Line Arguments
