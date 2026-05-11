@@ -33,6 +33,11 @@ BAND_CONFIG = {
         'name': 'K-band (~18 GHz)', 
         'f_min': 17000,
         'f_max': 19000,
+    },
+    '1.4GHz': {
+        'name': 'L-band (~1.4 GHz)',
+        'f_min': 1000,
+        'f_max': 2000,
     }
 }
 
@@ -402,8 +407,10 @@ def main():
                         help='Max total snippets per band')
     parser.add_argument('--name', default='backgrounds',
                         help='Output dataset name prefix')
-    parser.add_argument('--band', '-b', choices=['6GHz', '18GHz', 'all'], default='all',
+    parser.add_argument('--band', '-b', choices=['6GHz', '18GHz', '1.4GHz', 'all', 'mixed'], default='all',
                         help='Frequency band to process (default: all)')
+    parser.add_argument('--match-json', type=str, default=None,
+                        help='Path to a metadata.json (e.g. from RST) to extract exactly the same targets')
     parser.add_argument('--training-cadences', '-t', type=int, default=None,
                         help='Number of cadences to use for training (rest saved for inference)')
     parser.add_argument('--list-only', action='store_true',
@@ -424,9 +431,17 @@ def main():
     
     if args.list_only:
         return
+        
+    # Match specific targets if a JSON is provided
+    target_filter = None
+    if args.match_json:
+        with open(args.match_json, 'r') as f:
+            meta = json.load(f)
+            target_filter = set(meta.get('targets', []))
+            print(f"\nFiltering cadences by {len(target_filter)} targets from {args.match_json}")
     
     # Get cadences by band
-    bands_to_process = [args.band] if args.band != 'all' else list(BAND_CONFIG.keys())
+    bands_to_process = [args.band] if args.band not in ['all', 'mixed'] else list(BAND_CONFIG.keys())
     
     for band_name in bands_to_process:
         by_band = builder.get_cadences_by_band(band_name)
@@ -441,6 +456,13 @@ def main():
         print(f"{'='*60}")
         print(f"  Cadences: {len(band_cadences)}")
         
+        if target_filter:
+            band_cadences = [c for c in band_cadences if c.target_name in target_filter]
+            if not band_cadences:
+                print(f"  No matching cadences in this band after JSON filter.")
+                continue
+            print(f"  Cadences after JSON filter: {len(band_cadences)}")
+            
         # Split into training vs inference if requested
         if args.training_cadences and args.training_cadences < len(band_cadences):
             training_cadences = band_cadences[:args.training_cadences]
