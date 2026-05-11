@@ -55,10 +55,10 @@ def parse_args():
                         help='Training batch size (default: 1000)')
     
     # Model hyperparameters
-    parser.add_argument('--snr-base', type=int, default=10,
-                        help='Base SNR for signal injection (default: 10)')
-    parser.add_argument('--snr-range', type=int, default=40,
-                        help='SNR range (default: 40)')
+    parser.add_argument('--snr-min', type=int, default=10,
+                        help='Minimum SNR for log-uniform injection (default: 10)')
+    parser.add_argument('--snr-max', type=int, default=50,
+                        help='Maximum SNR for log-uniform injection (default: 50)')
     parser.add_argument('--beta', type=float, default=1.5,
                         help='Beta parameter for VAE (default: 1.5)')
     parser.add_argument('--alpha', type=float, default=10.0,
@@ -129,8 +129,8 @@ if len(EPOCHS_PER_BATCH) < NUM_BATCHES:
     EPOCHS_PER_BATCH.extend([args.epochs] * (NUM_BATCHES - len(EPOCHS_PER_BATCH)))
 
 # SNR settings
-SNR_BASE = args.snr_base
-SNR_RANGE = args.snr_range
+SNR_MIN = args.snr_min
+SNR_MAX = args.snr_max
 
 # Model hyperparameters
 LEARNING_RATE = args.lr
@@ -168,7 +168,7 @@ print(f"  Training batches: {NUM_BATCHES}")
 print(f"  Samples per batch: {NUM_SAMPLES_TRAIN}")
 print(f"  Epochs per batch: {EPOCHS_PER_BATCH[0]}-{EPOCHS_PER_BATCH[-1]}")
 print(f"  Total epochs: {sum(EPOCHS_PER_BATCH)}")
-print(f"  SNR range: {SNR_BASE} to {SNR_BASE + SNR_RANGE}")
+print(f"  SNR range: [{SNR_MIN}, {SNR_MAX}] log-uniform")
 print(f"  beta: {BETA}, alpha: {ALPHA}")
 print(f"  Use SRT Plate: {USE_SRT_PLATE}")
 if USE_SRT_PLATE:
@@ -315,15 +315,19 @@ def _init_worker(plate_path, use_mmap=False, shape=None, dtype=None):
 
 def _generate_true_sample(args):
     """Worker function for generating a true sample."""
-    seed, snr_base, snr_range = args
-    params = CadenceParams(fchans=4096, tchans=16, snr_base=snr_base, snr_range=snr_range)
+    seed, snr_min, snr_max = args
+    from src.data.signal_generator import SignalParams
+    signal_params = SignalParams(snr_min=snr_min, snr_max=snr_max)
+    params = CadenceParams(fchans=4096, tchans=16, signal_params=signal_params)
     cadence_gen = CadenceGenerator(params, plate=_WORKER_PLATE, seed=seed)
     return cadence_gen.create_true_sample_fast()
 
 def _generate_false_sample(args):
     """Worker function for generating a false sample."""
-    seed, snr_base, snr_range = args
-    params = CadenceParams(fchans=4096, tchans=16, snr_base=snr_base, snr_range=snr_range)
+    seed, snr_min, snr_max = args
+    from src.data.signal_generator import SignalParams
+    signal_params = SignalParams(snr_min=snr_min, snr_max=snr_max)
+    params = CadenceParams(fchans=4096, tchans=16, signal_params=signal_params)
     cadence_gen = CadenceGenerator(params, plate=_WORKER_PLATE, seed=seed)
     return cadence_gen.create_false_sample()
 
@@ -342,9 +346,9 @@ def generate_training_data(num_samples, seed=None):
     print(f"  Using {NUM_WORKERS} CPU workers for parallel generation...")
     
     # Prepare arguments with unique seeds (NO plate - loaded by workers)
-    vae_args = [(base_seed + i, SNR_BASE, SNR_RANGE) for i in range(num_samples)]
-    true_args = [(base_seed + 10000 + i, SNR_BASE, SNR_RANGE) for i in range(num_samples * 6)]
-    false_args = [(base_seed + 100000 + i, SNR_BASE, SNR_RANGE) for i in range(num_samples * 6)]
+    vae_args = [(base_seed + i, SNR_MIN, SNR_MAX) for i in range(num_samples)]
+    true_args = [(base_seed + 10000 + i, SNR_MIN, SNR_MAX) for i in range(num_samples * 6)]
+    false_args = [(base_seed + 100000 + i, SNR_MIN, SNR_MAX) for i in range(num_samples * 6)]
     
     # Generate in parallel with initializer
     init_args = (SRT_PLATE_PATH_FOR_WORKERS, USE_MMAP, SRT_PLATE_SHAPE, SRT_PLATE_DTYPE)
@@ -723,7 +727,7 @@ Training Parameters (Paper-aligned):
   - Total samples seen: {NUM_BATCHES * NUM_SAMPLES_TRAIN}
   - beta: {BETA}
   - alpha: {ALPHA}
-  - SNR range: {SNR_BASE}-{SNR_BASE + SNR_RANGE}
+  - SNR range: {SNR_MIN}-{SNR_MAX} log-uniform
   - GPUs: {strategy.num_replicas_in_sync}
 
 Performance Metrics:
