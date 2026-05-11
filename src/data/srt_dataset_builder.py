@@ -440,8 +440,35 @@ def main():
             target_filter = set(meta.get('targets', []))
             print(f"\nFiltering cadences by {len(target_filter)} targets from {args.match_json}")
     
+    if args.band == 'mixed':
+        print(f"\n{'='*60}")
+        print("PROCESSING: MIXED MULTI-BAND DATASET")
+        print(f"{'='*60}")
+        
+        complete_cadences = [c for c in builder.cadences.values() if c.is_complete]
+        
+        if target_filter:
+            complete_cadences = [c for c in complete_cadences if c.target_name in target_filter]
+            print(f"  Cadences after JSON filter: {len(complete_cadences)}")
+            
+        if not complete_cadences:
+            print("No complete cadences found for mixed dataset.")
+            return
+            
+        output_name = f"{args.name}_mixed"
+        builder.build_training_dataset(
+            cadences=complete_cadences,
+            snippets_per_cadence=args.snippets_per_cadence,
+            max_total_snippets=args.max_snippets,
+            output_name=output_name
+        )
+        print(f"\n{'='*60}")
+        print("COMPLETE")
+        print(f"{'='*60}")
+        return
+
     # Get cadences by band
-    bands_to_process = [args.band] if args.band not in ['all', 'mixed'] else list(BAND_CONFIG.keys())
+    bands_to_process = [args.band] if args.band != 'all' else list(BAND_CONFIG.keys())
     
     for band_name in bands_to_process:
         by_band = builder.get_cadences_by_band(band_name)
