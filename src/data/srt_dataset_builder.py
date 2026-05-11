@@ -410,7 +410,9 @@ def main():
     parser.add_argument('--band', '-b', choices=['6GHz', '18GHz', '1.4GHz', 'all', 'mixed'], default='all',
                         help='Frequency band to process (default: all)')
     parser.add_argument('--match-json', type=str, default=None,
-                        help='Path to a metadata.json (e.g. from RST) to extract exactly the same targets')
+                        help='Path to a metadata.json to extract targets (less precise than exclude-txt)')
+    parser.add_argument('--exclude-txt', type=str, default=None,
+                        help='Path to inference_cadences.txt to perfectly exclude inference cadences')
     parser.add_argument('--training-cadences', '-t', type=int, default=None,
                         help='Number of cadences to use for training (rest saved for inference)')
     parser.add_argument('--list-only', action='store_true',
@@ -439,6 +441,17 @@ def main():
             meta = json.load(f)
             target_filter = set(meta.get('targets', []))
             print(f"\nFiltering cadences by {len(target_filter)} targets from {args.match_json}")
+            
+    # Exclude specific cadences if a TXT is provided
+    exclude_files = set()
+    if args.exclude_txt:
+        with open(args.exclude_txt, 'r') as f:
+            for line in f:
+                if '|' in line:
+                    _, files_str = line.strip().split('|')
+                    first_file = Path(files_str.split(',')[0]).name
+                    exclude_files.add(first_file)
+        print(f"\nExcluding {len(exclude_files)} cadences listed in {args.exclude_txt}")
     
     if args.band == 'mixed':
         print(f"\n{'='*60}")
@@ -449,7 +462,11 @@ def main():
         
         if target_filter:
             complete_cadences = [c for c in complete_cadences if c.target_name in target_filter]
-            print(f"  Cadences after JSON filter: {len(complete_cadences)}")
+            print(f"  Cadences after JSON target filter: {len(complete_cadences)}")
+            
+        if exclude_files:
+            complete_cadences = [c for c in complete_cadences if c.files[0].name not in exclude_files]
+            print(f"  Cadences after TXT exclude filter: {len(complete_cadences)}")
             
         if not complete_cadences:
             print("No complete cadences found for mixed dataset.")
@@ -485,10 +502,15 @@ def main():
         
         if target_filter:
             band_cadences = [c for c in band_cadences if c.target_name in target_filter]
-            if not band_cadences:
-                print(f"  No matching cadences in this band after JSON filter.")
-                continue
-            print(f"  Cadences after JSON filter: {len(band_cadences)}")
+            print(f"  Cadences after JSON target filter: {len(band_cadences)}")
+            
+        if exclude_files:
+            band_cadences = [c for c in band_cadences if c.files[0].name not in exclude_files]
+            print(f"  Cadences after TXT exclude filter: {len(band_cadences)}")
+            
+        if not band_cadences:
+            print(f"  No matching cadences in this band after filters.")
+            continue
             
         # Split into training vs inference if requested
         if args.training_cadences and args.training_cadences < len(band_cadences):
