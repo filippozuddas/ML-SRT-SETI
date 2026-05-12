@@ -448,7 +448,8 @@ def main():
         with open(args.exclude_txt, 'r') as f:
             for line in f:
                 if '|' in line:
-                    _, files_str = line.strip().split('|')
+                    parts = line.strip().split('|')
+                    files_str = parts[-1]  # The file list is always the last part
                     first_file = Path(files_str.split(',')[0]).name
                     exclude_files.add(first_file)
         print(f"\nExcluding {len(exclude_files)} cadences listed in {args.exclude_txt}")
