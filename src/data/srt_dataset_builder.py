@@ -446,6 +446,16 @@ def main():
                         help='Path to inference_cadences.txt to perfectly exclude inference cadences')
     parser.add_argument('--training-cadences', '-t', type=int, default=None,
                         help='Number of cadences to use for training (rest saved for inference)')
+    parser.add_argument('--mix-bins', type=float, default=1000.0,
+                        help='Bin size in MHz for balancing a mixed dataset (default: 1000)')
+    parser.add_argument('--train-fraction', type=float, default=0.5,
+                        help='Fraction of cadences per frequency bin used for training in '
+                             '--band mixed; the rest are held out for inference (default: 0.5)')
+    parser.add_argument('--exclude-targets', nargs='+', default=None,
+                        help='Target names (e.g. TIC368536386) to keep OUT of training backgrounds; '
+                             'routed to the inference pool instead')
+    parser.add_argument('--seed', type=int, default=None,
+                        help='Random seed for reproducible cadence selection in --band mixed')
     parser.add_argument('--list-only', action='store_true',
                         help='Only list cadences, do not extract')
     
@@ -489,24 +499,75 @@ def main():
         print(f"\n{'='*60}")
         print("PROCESSING: MIXED MULTI-BAND DATASET")
         print(f"{'='*60}")
-        
+
         complete_cadences = [c for c in builder.cadences.values() if c.is_complete]
-        
+
         if target_filter:
             complete_cadences = [c for c in complete_cadences if c.target_name in target_filter]
             print(f"  Cadences after JSON target filter: {len(complete_cadences)}")
-            
+
         if exclude_files:
             complete_cadences = [c for c in complete_cadences if c.files[0].name not in exclude_files]
             print(f"  Cadences after TXT exclude filter: {len(complete_cadences)}")
-            
+
         if not complete_cadences:
             print("No complete cadences found for mixed dataset.")
             return
-            
+
+        import random
+        if args.seed is not None:
+            random.seed(args.seed)
+
+        # Hold out explicitly-excluded targets (e.g. the benchmark) from training:
+        # they go straight to the inference pool and never feed the background set.
+        exclude_targets = set(args.exclude_targets or [])
+        excluded_cadences = [c for c in complete_cadences if c.target_name in exclude_targets]
+        complete_cadences = [c for c in complete_cadences if c.target_name not in exclude_targets]
+        if excluded_cadences:
+            print(f"  Excluded {len(excluded_cadences)} cadence(s) from training "
+                  f"(targets: {sorted(exclude_targets)}) -> inference pool")
+
+        # Group by frequency bin (e.g. 4800 -> 5000, 6100 -> 6000 for mix_bins=1000)
+        by_freq = defaultdict(list)
+        for c in complete_cadences:
+            bin_mhz = round(c.freq_start / args.mix_bins) * args.mix_bins
+            by_freq[bin_mhz].append(c)
+
+        selected_cadences = []
+        inference_cadences = list(excluded_cadences)
+        print(f"Splitting each of {len(by_freq)} frequency bins "
+              f"{args.train_fraction:.0%} train / {1 - args.train_fraction:.0%} inference:")
+        for bin_mhz in sorted(by_freq.keys()):
+            cads = by_freq[bin_mhz]
+            n_take = int(len(cads) * args.train_fraction)
+            selected = random.sample(cads, n_take)
+
+            selected_ids = {id(c) for c in selected}
+            for c in cads:
+                if id(c) not in selected_ids:
+                    inference_cadences.append(c)
+
+            selected_cadences.extend(selected)
+            print(f"  - ~{bin_mhz/1000:.1f} GHz: {n_take}/{len(cads)} train, "
+                  f"{len(cads) - n_take} inference")
+
+        # Shuffle so the snippet-budget cap (if ever hit) doesn't systematically
+        # starve whichever frequency bin is processed last.
+        random.shuffle(selected_cadences)
+
+        # Save the list of inference cadences (target|freq_start|files, matching
+        # the format --exclude-txt already parses via the last '|'-separated field)
+        if inference_cadences:
+            inference_path = builder.output_dir / "inference_cadences_mixed.txt"
+            with open(inference_path, 'w') as f:
+                for c in inference_cadences:
+                    files_str = ','.join(str(fp) for fp in c.files)
+                    f.write(f"{c.target_name}|{c.freq_start}|{files_str}\n")
+            print(f"\n  Saved {len(inference_cadences)} held-out cadences for inference testing to: {inference_path}")
+
         output_name = f"{args.name}_mixed"
         builder.build_training_dataset(
-            cadences=complete_cadences,
+            cadences=selected_cadences,
             snippets_per_cadence=args.snippets_per_cadence,
             max_total_snippets=args.max_snippets,
             output_name=output_name
