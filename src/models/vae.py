@@ -139,10 +139,14 @@ class ContrastiveVAE(keras.Model):
         a3 = self.encoder(true_data[:, 4, :, :, :], training=training)[2]
         d = self.encoder(true_data[:, 5, :, :, :], training=training)[2]
         
-        # Same-class loss: minimize distance within ON and OFF groups
+        # Same-class loss: minimize distance within ON and OFF groups (ordered pairs, n=21)
         same = tf.constant(0.0)
-        same += self.loss_same(a1, a2) + self.loss_same(a1, a3) + self.loss_same(a2, a3)
-        same += self.loss_same(b, c) + self.loss_same(c, d) + self.loss_same(b, d)
+        same += self.loss_same(a1, a2) + self.loss_same(a2, a1)
+        same += self.loss_same(a1, a3) + self.loss_same(a3, a1)
+        same += self.loss_same(a2, a3) + self.loss_same(a3, a2)
+        same += self.loss_same(b, c) + self.loss_same(c, b)
+        same += self.loss_same(b, d) + self.loss_same(d, b)
+        same += self.loss_same(c, d) + self.loss_same(d, c)
         
         # Different-class loss: maximize distance between ON and OFF
         diff = tf.constant(0.0)

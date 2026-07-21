@@ -71,8 +71,8 @@ print(f'    SNR={info["snr"]:.1f}, DR={info["drift_rate"]:.4f} Hz/s, '
 if not ok:
     errors.append('inject_signal shape')
 
-# All 4 RFI types
-for rfi_type in ['linear', 'stationary', 'random_walk', 'scintillating']:
+# All 6 RFI types
+for rfi_type in ['linear', 'stationary', 'random_walk', 'scintillating', 'broadband', 'pulsed']:
     rfi_data, rfi_info = sg.inject_rfi_signal(data, rfi_type=rfi_type)
     ok = rfi_data.shape == (96, 4096)
     print(f'  inject_rfi_signal({rfi_type}):  {PASS if ok else FAIL}')
@@ -82,24 +82,27 @@ for rfi_type in ['linear', 'stationary', 'random_walk', 'scintillating']:
 # Verify log-uniform SNR distribution
 snrs = [sg._sample_snr() for _ in range(1000)]
 log_snrs = np.log10(snrs)
-ok_min = 9.0 <= min(snrs) <= 12.0
+ok_min = 4.0 <= min(snrs) <= 6.0
 ok_max = 40.0 <= max(snrs) <= 52.0
 median = float(np.median(snrs))
-ok_median = 18.0 <= median <= 24.0  # median of log-uniform [10,50] ≈ sqrt(10*50) ≈ 22.4
-print(f'  SNR log-uniform [10,50]:  {PASS if (ok_min and ok_max and ok_median) else FAIL}')
-print(f'    min={min(snrs):.1f}  max={max(snrs):.1f}  median={median:.1f}  (expected ~22)')
+ok_median = 13.0 <= median <= 19.0  # median of log-uniform [5,50] ≈ sqrt(5*50) ≈ 15.8
+print(f'  SNR log-uniform [5,50]:  {PASS if (ok_min and ok_max and ok_median) else FAIL}')
+print(f'    min={min(snrs):.1f}  max={max(snrs):.1f}  median={median:.1f}  (expected ~15.8)')
 if not (ok_min and ok_max and ok_median):
     errors.append('SNR distribution')
 
-# Verify drift rate distribution
+# Verify drift rate distribution (default: lognormal, centred on drift_median=0.3 Hz/s)
 drs = [sg._sample_drift_rate()[0] for _ in range(1000)]
 zero_count = sum(1 for d in drs if d == 0.0)
 ok_zero = 20 <= zero_count <= 80  # ~5% zero drift, ±3σ
 abs_drs = [abs(d) for d in drs if d != 0.0]
 ok_range = all(0.009 <= d <= max_dr * 1.01 for d in abs_drs)
-print(f'  Drift rate log-uniform:  {PASS if (ok_zero and ok_range) else FAIL}')
-print(f'    zero_drift={zero_count}/1000 (~50 expected), |DR| in [0.01, {max_dr:.2f}]: {ok_range}')
-if not (ok_zero and ok_range):
+median_dr = float(np.median(abs_drs))
+ok_median_dr = 0.15 <= median_dr <= 0.6  # lognormal median ≈ drift_median = 0.3 Hz/s
+print(f'  Drift rate lognormal:  {PASS if (ok_zero and ok_range and ok_median_dr) else FAIL}')
+print(f'    zero_drift={zero_count}/1000 (~50 expected), |DR| in [0.01, {max_dr:.2f}]: {ok_range}, '
+      f'median|DR|={median_dr:.3f} (expected ~0.3)')
+if not (ok_zero and ok_range and ok_median_dr):
     errors.append('Drift rate distribution')
 
 # -----------------------------------------------------------------------

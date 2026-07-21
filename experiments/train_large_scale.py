@@ -55,8 +55,8 @@ def parse_args():
                         help='Training batch size (default: 1000)')
     
     # Model hyperparameters
-    parser.add_argument('--snr-min', type=int, default=10,
-                        help='Minimum SNR for log-uniform injection (default: 10)')
+    parser.add_argument('--snr-min', type=int, default=5,
+                        help='Minimum SNR for log-uniform injection (default: 5)')
     parser.add_argument('--snr-max', type=int, default=50,
                         help='Maximum SNR for log-uniform injection (default: 50)')
     parser.add_argument('--beta', type=float, default=1.5,
@@ -89,7 +89,12 @@ def parse_args():
     # Memory optimization
     parser.add_argument('--mmap', action='store_true',
                         help='Use memory-mapped plate file (requires .mmap file, saves RAM)')
-    
+
+    # Background plate split (prevents train/val background leakage)
+    parser.add_argument('--val-plate-split', type=float, default=0.15,
+                        help='Fraction of real backgrounds reserved for val/eval, '
+                             'disjoint from training (default: 0.15)')
+
     return parser.parse_args()
 
 
@@ -162,6 +167,9 @@ NUM_WORKERS = args.workers
 
 # Memory-mapped plate
 USE_MMAP = args.mmap
+
+# Background plate split (disjoint train/val, see below once plate is loaded)
+VAL_PLATE_SPLIT = args.val_plate_split
 
 print(f"\nConfiguration:")
 print(f"  Training batches: {NUM_BATCHES}")
@@ -294,16 +302,58 @@ if USE_SRT_PLATE:
         print(f"  Falling back to synthetic Gaussian noise")
         SRT_PLATE = None
 
-# Global variable for workers (set by initializer)
+# Split the background plate into disjoint train/val index pools BEFORE
+# generation, so no real-observation snippet feeds both splits (prevents
+# the model from memorizing background texture and inflating val metrics).
+# Computed from a fixed seed so every worker derives the identical split
+# independently (only the small index arrays are pickled to workers, not
+# a duplicated copy of the plate itself).
+SRT_PLATE_TRAIN_IDX = None
+SRT_PLATE_VAL_IDX = None
+if SRT_PLATE_SHAPE is not None:
+    n_bg = SRT_PLATE_SHAPE[0]
+    bg_perm = np.random.default_rng(12345).permutation(n_bg)
+    n_bg_val = max(1, int(round(n_bg * VAL_PLATE_SPLIT))) if VAL_PLATE_SPLIT > 0 else 0
+    SRT_PLATE_VAL_IDX = bg_perm[:n_bg_val]
+    SRT_PLATE_TRAIN_IDX = bg_perm[n_bg_val:]
+    print(f"  Background split (snippet-level): "
+          f"{len(SRT_PLATE_TRAIN_IDX)} train / {n_bg_val} val (disjoint)")
+
+# Global variables for workers (set by initializer)
 _WORKER_PLATE = None
 _WORKER_PLATE_PATH = None
+_WORKER_PLATE_TRAIN = None
+_WORKER_PLATE_VAL = None
 
-def _init_worker(plate_path, use_mmap=False, shape=None, dtype=None):
+
+class _SplitPlateView:
+    """Lazy view over a subset of plate indices (train or val).
+
+    Avoids materializing a full copy of the subset: a single-index lookup
+    (`self._plate[self._indices[i]]`) is a normal numpy/memmap read, so this
+    keeps the mmap-backed plate lazy (only the requested snippet is read into
+    RAM) while still exposing the `.shape[0]` / `__getitem__` interface
+    CadenceGenerator expects.
+    """
+    def __init__(self, plate, indices):
+        self._plate = plate
+        self._indices = indices
+
+    @property
+    def shape(self):
+        return (len(self._indices),) + self._plate.shape[1:]
+
+    def __getitem__(self, i):
+        return self._plate[self._indices[i]]
+
+
+def _init_worker(plate_path, use_mmap=False, shape=None, dtype=None,
+                  train_idx=None, val_idx=None):
     """Initialize worker with plate loaded from file.
-    
+
     With mmap=True, workers share the same memory region.
     """
-    global _WORKER_PLATE, _WORKER_PLATE_PATH
+    global _WORKER_PLATE, _WORKER_PLATE_PATH, _WORKER_PLATE_TRAIN, _WORKER_PLATE_VAL
     if plate_path is not None and plate_path != _WORKER_PLATE_PATH:
         if use_mmap and shape is not None:
             # Memory-mapped: shares memory with parent process
@@ -312,46 +362,58 @@ def _init_worker(plate_path, use_mmap=False, shape=None, dtype=None):
             # Standard: copies entire plate to worker memory
             _WORKER_PLATE = np.load(plate_path)['backgrounds']
         _WORKER_PLATE_PATH = plate_path
+        if train_idx is not None:
+            _WORKER_PLATE_TRAIN = _SplitPlateView(_WORKER_PLATE, train_idx)
+        if val_idx is not None:
+            _WORKER_PLATE_VAL = _SplitPlateView(_WORKER_PLATE, val_idx)
 
 def _generate_true_sample(args):
     """Worker function for generating a true sample."""
-    seed, snr_min, snr_max = args
+    seed, snr_min, snr_max, split = args
     from src.data.signal_generator import SignalParams
     signal_params = SignalParams(snr_min=snr_min, snr_max=snr_max)
     params = CadenceParams(fchans=4096, tchans=16, signal_params=signal_params)
-    cadence_gen = CadenceGenerator(params, plate=_WORKER_PLATE, seed=seed)
+    plate = _WORKER_PLATE_VAL if split == 'val' else _WORKER_PLATE_TRAIN
+    cadence_gen = CadenceGenerator(params, plate=plate, seed=seed)
     return cadence_gen.create_true_sample_fast()
 
 def _generate_false_sample(args):
     """Worker function for generating a false sample."""
-    seed, snr_min, snr_max = args
+    seed, snr_min, snr_max, split = args
     from src.data.signal_generator import SignalParams
     signal_params = SignalParams(snr_min=snr_min, snr_max=snr_max)
     params = CadenceParams(fchans=4096, tchans=16, signal_params=signal_params)
-    cadence_gen = CadenceGenerator(params, plate=_WORKER_PLATE, seed=seed)
+    plate = _WORKER_PLATE_VAL if split == 'val' else _WORKER_PLATE_TRAIN
+    cadence_gen = CadenceGenerator(params, plate=plate, seed=seed)
     return cadence_gen.create_false_sample()
 
-def generate_training_data(num_samples, seed=None):
+def generate_training_data(num_samples, seed=None, split='train'):
     """Generate training data with multiprocessing.
-    
+
+    Args:
+        split: 'train' or 'val' — selects the disjoint background pool
+               (SRT_PLATE_TRAIN_IDX / SRT_PLATE_VAL_IDX) so real-observation
+               snippets never feed both splits.
+
     Original code format:
     - data (vae): (N*6, 16, 512, 1) - flattened from N cadences
     - true_data: (N*6, 6, 16, 512, 1) - N*6 complete cadences (for clustering loss)
     - false_data: (N*6, 6, 16, 512, 1) - N*6 complete cadences (for clustering loss)
-    
+
     This ensures all have same first dimension for model.fit().
     """
     base_seed = seed if seed is not None else 0
-    
+
     print(f"  Using {NUM_WORKERS} CPU workers for parallel generation...")
-    
+
     # Prepare arguments with unique seeds (NO plate - loaded by workers)
-    vae_args = [(base_seed + i, SNR_MIN, SNR_MAX) for i in range(num_samples)]
-    true_args = [(base_seed + 10000 + i, SNR_MIN, SNR_MAX) for i in range(num_samples * 6)]
-    false_args = [(base_seed + 100000 + i, SNR_MIN, SNR_MAX) for i in range(num_samples * 6)]
-    
+    vae_args = [(base_seed + i, SNR_MIN, SNR_MAX, split) for i in range(num_samples)]
+    true_args = [(base_seed + 10000 + i, SNR_MIN, SNR_MAX, split) for i in range(num_samples * 6)]
+    false_args = [(base_seed + 100000 + i, SNR_MIN, SNR_MAX, split) for i in range(num_samples * 6)]
+
     # Generate in parallel with initializer
-    init_args = (SRT_PLATE_PATH_FOR_WORKERS, USE_MMAP, SRT_PLATE_SHAPE, SRT_PLATE_DTYPE)
+    init_args = (SRT_PLATE_PATH_FOR_WORKERS, USE_MMAP, SRT_PLATE_SHAPE, SRT_PLATE_DTYPE,
+                 SRT_PLATE_TRAIN_IDX, SRT_PLATE_VAL_IDX)
     with Pool(NUM_WORKERS, initializer=_init_worker, initargs=init_args) as pool:
         print(f"  Generating {num_samples} VAE samples...")
         vae_cadences = list(tqdm(pool.imap(_generate_true_sample, vae_args), 
@@ -461,18 +523,20 @@ for batch_idx in range(START_BATCH, NUM_BATCHES):
     # Generate fresh training data
     print(f"\nGenerating training data (seed={batch_idx * 1000})...")
     vae_train, true_train, false_train = generate_training_data(
-        NUM_SAMPLES_TRAIN, 
-        seed=batch_idx * 1000
+        NUM_SAMPLES_TRAIN,
+        seed=batch_idx * 1000,
+        split='train'
     )
     print(f"  VAE data: {vae_train.shape}")
     print(f"  True data: {true_train.shape}")
     print(f"  False data: {false_train.shape}")
-    
-    # Generate fresh validation data
+
+    # Generate fresh validation data (disjoint background pool from training)
     print(f"Generating validation data...")
     vae_val, true_val, false_val = generate_training_data(
-        NUM_SAMPLES_VAL, 
-        seed=batch_idx * 1000 + 500
+        NUM_SAMPLES_VAL,
+        seed=batch_idx * 1000 + 500,
+        split='val'
     )
     
     # Prepare data in format expected by model.fit()
@@ -620,10 +684,11 @@ print("\n" + "=" * 70)
 print("PHASE 2: FINAL EVALUATION")
 print("=" * 70)
 
-# Generate evaluation data
+# Generate evaluation data — held-out background pool (disjoint from training),
+# same split used for validation, so final metrics reflect unseen real backgrounds.
 print("\nGenerating evaluation data...")
 NUM_EVAL_SAMPLES = 2000
-vae_eval, true_eval, false_eval = generate_training_data(NUM_EVAL_SAMPLES, seed=99999)
+vae_eval, true_eval, false_eval = generate_training_data(NUM_EVAL_SAMPLES, seed=99999, split='val')
 
 # Extract latents
 print("Extracting latent representations...")
