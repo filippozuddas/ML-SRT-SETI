@@ -385,12 +385,12 @@ class SRTDatasetBuilder:
         print(f"  Max total: {max_total_snippets}")
         print(f"  Output shape: (N, 6, 16, 4096)")
 
-        # Preallocate the full output once and fill it cadence-by-cadence.
-        # Accumulating every cadence's snippets in a Python list and then
-        # np.concatenate'ing them holds ~all snippets in RAM AND momentarily
-        # doubles them during the concatenate — combined with a per-cadence
-        # full-file load that's how this blew past 250 GB and OOM'd. Now we
-        # hold at most: the preallocated result + one cadence's small temp array.
+        # Accumulate into a disk-backed memmap, not an in-RAM array. At
+        # SNIPPET_WIDTH=4096, a 200k-snippet plate is ~290 GiB — the OUTPUT
+        # array alone doesn't fit in RAM regardless of how frugally each
+        # cadence is read (see extract_backgrounds). Writing through a memmap
+        # lets the OS page the buffer to disk instead of requiring it all
+        # resident at once; peak RAM is one cadence's small temp array.
         per_cadence_n = [
             min(snippets_per_cadence, c.n_snippets)
             for c in cadences
@@ -399,7 +399,10 @@ class SRTDatasetBuilder:
         if capacity == 0:
             raise ValueError("No snippets extracted")
 
-        dataset = np.empty((capacity, 6, 16, self.SNIPPET_WIDTH), dtype=np.float32)
+        itemsize = 6 * 16 * self.SNIPPET_WIDTH * 4  # bytes per snippet (float32)
+        building_path = self.output_dir / f"{output_name}.building.mmap"
+        dataset = np.memmap(building_path, dtype=np.float32, mode='w+',
+                            shape=(capacity, 6, 16, self.SNIPPET_WIDTH))
         metadata = []
         pos = 0
 
@@ -429,29 +432,58 @@ class SRTDatasetBuilder:
             del snippets
 
         if pos == 0:
+            building_path.unlink(missing_ok=True)
             raise ValueError("No snippets extracted")
 
-        # Trim to what was actually filled (view into the preallocated buffer).
-        dataset = dataset[:pos]
+        dataset.flush()
+        del dataset  # release the mmap handle before truncating/renaming the file
 
-        # Save
-        output_path = self.output_dir / f"{output_name}.npz"
-        np.savez_compressed(output_path, backgrounds=dataset, n_samples=len(dataset))
-        
+        final_bytes = pos * itemsize
+        saved_shape = (pos, 6, 16, self.SNIPPET_WIDTH)
+        # Above this, skip packaging into a compressed .npz (the compressor
+        # needs to walk the whole array — slow and disk-hungry for no benefit
+        # on ~incompressible telescope noise) and keep the raw memmap instead.
+        NPZ_THRESHOLD_BYTES = 20 * 1024 ** 3  # 20 GiB
+
+        if final_bytes <= NPZ_THRESHOLD_BYTES:
+            trimmed = np.memmap(building_path, dtype=np.float32, mode='r',
+                                shape=(capacity, 6, 16, self.SNIPPET_WIDTH))[:pos]
+            output_path = self.output_dir / f"{output_name}.npz"
+            np.savez_compressed(output_path, backgrounds=trimmed, n_samples=pos)
+            del trimmed
+            building_path.unlink()
+        else:
+            # Too large to package — keep it as the raw memmap + meta.json
+            # that train_large_scale.py already reads via --mmap (same
+            # convention as experiments/convert_plate_to_mmap.py).
+            output_path = self.output_dir / f"{output_name}.mmap"
+            os.replace(building_path, output_path)  # instant, same filesystem
+            os.truncate(output_path, final_bytes)     # drop unused tail capacity
+            with open(self.output_dir / f"{output_name}.meta.json", 'w') as f:
+                json.dump({
+                    'shape': list(saved_shape),
+                    'dtype': 'float32',
+                    'nbytes': final_bytes,
+                }, f, indent=2)
+
         meta_path = self.output_dir / f"{output_name}_metadata.json"
         with open(meta_path, 'w') as f:
             json.dump({
-                'n_samples': len(dataset),
+                'n_samples': pos,
                 'n_cadences': len(cadences),
-                'shape': list(dataset.shape),
+                'shape': list(saved_shape),
                 'fchans': self.SNIPPET_WIDTH,
                 'targets': list(set(m['target'] for m in metadata))
             }, f, indent=2)
-        
+
         print(f"\n✅ Dataset saved:")
-        print(f"   {output_path} ({dataset.shape})")
+        print(f"   {output_path} ({saved_shape})")
         print(f"   {meta_path}")
-        
+        if output_path.suffix == '.mmap':
+            print(f"\n   Dataset too large for a portable .npz ({final_bytes / 1e9:.1f} GB) "
+                  f"— saved as a raw memmap instead.")
+            print(f"   Train with: --plate {output_path} --mmap")
+
         return str(output_path)
 
 
